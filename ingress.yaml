@@ -1,0 +1,29 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: llm-calculator
+  namespace: default
+  labels:
+    app: llm-calculator
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    # Uncomment to enable TLS via cert-manager:
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx   # adjust to your ingress controller
+  rules:
+    - host: llm-calculator.example.com   # replace with your domain
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: llm-calculator
+                port:
+                  number: 80
+  # Uncomment to enable TLS:
+  # tls:
+  #   - hosts:
+  #       - llm-calculator.example.com
+  #     secretName: llm-calculator-tls

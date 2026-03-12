@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LLM Throughput Calculator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <div class="logo">LLM<span>/</span>GPU <span>·</span> Throughput Calculator</div>
+  <div class="header-tag">MAX BATCHED THROUGHPUT · ROOFLINE MODEL</div>
+</header>
+
+<div class="layout">
+
+  <!-- ── LEFT: INPUTS ── -->
+  <aside class="panel-inputs">
+
+    <!-- GPU Section -->
+    <div>
+      <div class="section-label">GPU Configuration</div>
+
+      <div class="input-group" style="margin-bottom:0.75rem">
+        <label>GPU Model</label>
+        <select id="gpuSelect" onchange="onGpuChange()">
+          <option value="">— select GPU —</option>
+          <optgroup label="Data Center (Hopper/Blackwell)">
+            <option value="h100">NVIDIA H100 SXM — 80 GB HBM3</option>
+            <option value="h200">NVIDIA H200 SXM — 141 GB HBM3e</option>
+            <option value="b200">NVIDIA B200 SXM — 192 GB HBM3e ★</option>
+          </optgroup>
+          <optgroup label="Data Center (Ampere)">
+            <option value="a100">NVIDIA A100 SXM — 80 GB HBM2e</option>
+          </optgroup>
+          <option value="custom">Custom GPU…</option>
+        </select>
+      </div>
+
+      <div class="custom-gpu-fields" id="customGpuFields">
+        <div class="params-grid">
+          <div class="input-group">
+            <label>VRAM (GB)</label>
+            <input type="number" id="cVram" placeholder="80" min="1" oninput="recalculate()">
+          </div>
+          <div class="input-group">
+            <label>Mem BW (GB/s)</label>
+            <input type="number" id="cBw" placeholder="3350" min="1" oninput="recalculate()">
+          </div>
+          <div class="input-group">
+            <label>BF16 TFLOPS</label>
+            <input type="number" id="cBf16" placeholder="989" min="1" oninput="recalculate()">
+          </div>
+          <div class="input-group">
+            <label>FP8 TFLOPS</label>
+            <input type="number" id="cFp8" placeholder="1979" min="0" oninput="recalculate()">
+          </div>
+          <div class="input-group">
+            <label>FP4 TFLOPS</label>
+            <input type="number" id="cFp4" placeholder="0" min="0" oninput="recalculate()">
+          </div>
+          <div class="input-group">
+            <label>INT8 TOPS</label>
+            <input type="number" id="cInt8" placeholder="0" min="0" oninput="recalculate()">
+          </div>
+        </div>
+      </div>
+
+      <div class="disclaimer" id="b200Disclaimer" style="margin-top:0.6rem">
+        ★ B200 TFLOPS figures are estimates from NVIDIA GTC 2024 keynote. Independent MLPerf benchmarks pending.
+      </div>
+
+      <div class="input-group" style="margin-top:0.75rem">
+        <label>GPU Count (Tensor Parallel)</label>
+        <div class="stepper">
+          <button onclick="stepGpu(-1)">−</button>
+          <div class="val" id="gpuCountVal">1</div>
+          <button onclick="stepGpu(1)">+</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Model Section -->
+    <div>
+      <div class="section-label">Model</div>
+
+      <div class="input-group" style="margin-bottom:0.5rem">
+        <label>HuggingFace Model ID</label>
+        <div class="model-row">
+          <input type="text" id="hfModelId" placeholder="meta-llama/Llama-3.1-8B"
+                 onkeydown="if(event.key==='Enter') fetchHFConfig()">
+          <button class="btn-fetch" id="fetchBtn" onclick="fetchHFConfig()">Fetch</button>
+        </div>
+        <div class="fetch-status" id="fetchStatus"></div>
+      </div>
+
+      <div class="params-grid">
+        <div class="input-group">
+          <label data-tip="Total trainable parameters">Params (B)</label>
+          <input type="number" id="mParams" placeholder="7" min="0.1" step="0.1" oninput="recalculate()">
+        </div>
+        <div class="input-group">
+          <label data-tip="Number of transformer layers">Layers</label>
+          <input type="number" id="mLayers" placeholder="32" min="1" oninput="recalculate()">
+        </div>
+        <div class="input-group">
+          <label data-tip="Embedding / hidden dimension">Hidden Dim</label>
+          <input type="number" id="mHidden" placeholder="4096" min="64" oninput="recalculate()">
+        </div>
+        <div class="input-group">
+          <label data-tip="Feed-forward / intermediate size">FFN Dim</label>
+          <input type="number" id="mFFN" placeholder="11008" min="64" oninput="recalculate()">
+        </div>
+        <div class="input-group">
+          <label data-tip="Number of query attention heads">Attn Heads</label>
+          <input type="number" id="mHeads" placeholder="32" min="1" oninput="recalculate()">
+        </div>
+        <div class="input-group">
+          <label data-tip="Key/Value heads (GQA). Same as Attn Heads if MHA.">KV Heads</label>
+          <input type="number" id="mKVHeads" placeholder="32" min="1" oninput="recalculate()">
+        </div>
+        <div class="input-group">
+          <label data-tip="Context / sequence length in tokens">Context Len</label>
+          <input type="number" id="mContext" placeholder="4096" min="128" oninput="recalculate()">
+        </div>
+        <div class="input-group">
+          <label data-tip="Vocabulary size">Vocab Size</label>
+          <input type="number" id="mVocab" placeholder="32000" min="1000" oninput="recalculate()">
+        </div>
+      </div>
+    </div>
+
+    <!-- Precision Section -->
+    <div>
+      <div class="section-label">Precision</div>
+      <div class="input-group">
+        <label>Weight / Compute Dtype</label>
+        <div class="precision-group" id="precisionGroup">
+          <div class="pill" data-prec="fp32"  onclick="setPrecision('fp32')">FP32</div>
+          <div class="pill active" data-prec="bf16" onclick="setPrecision('bf16')">BF16</div>
+          <div class="pill" data-prec="fp16" onclick="setPrecision('fp16')">FP16</div>
+          <div class="pill" data-prec="fp8"  onclick="setPrecision('fp8')">FP8</div>
+          <div class="pill" data-prec="int8" onclick="setPrecision('int8')">INT8</div>
+          <div class="pill" data-prec="int4" onclick="setPrecision('int4')">INT4</div>
+          <div class="pill" data-prec="fp4"  onclick="setPrecision('fp4')">FP4</div>
+        </div>
+        <div class="fetch-status" id="precNote" style="margin-top:0.4rem"></div>
+      </div>
+    </div>
+
+    <!-- Batch config -->
+    <div>
+      <div class="section-label">Batch Configuration</div>
+      <div class="params-grid">
+        <div class="input-group">
+          <label data-tip="Concurrent sequences in a batch">Batch Size</label>
+          <input type="number" id="bBatch" placeholder="32" min="1" oninput="recalculate()">
+        </div>
+        <div class="input-group">
+          <label data-tip="Typical tokens generated per request">Output Tokens</label>
+          <input type="number" id="bOutput" placeholder="256" min="1" oninput="recalculate()">
+        </div>
+      </div>
+    </div>
+
+  </aside>
+
+  <!-- ── RIGHT: OUTPUT ── -->
+  <main class="panel-output" id="outputPanel">
+    <div class="empty-state" id="emptyState">
+      <div class="empty-icon">⚡</div>
+      <div class="empty-text">
+        Select a GPU and enter model parameters<br>
+        to compute throughput estimates.
+      </div>
+    </div>
+  </main>
+
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

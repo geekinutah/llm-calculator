@@ -1,0 +1,4 @@
+.claude/
+index.html
+__pycache__/
+*.pyc
