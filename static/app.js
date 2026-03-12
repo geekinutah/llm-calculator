@@ -68,8 +68,8 @@ const PREC_META = {
   fp4:  { bytes: 0.5, label: 'FP4' },
 };
 
-// KV cache always stays at bf16 (common default)
-const KV_BYTES = 2;
+// KV cache uses same precision as model weights (floored at 1 byte — 4-bit KV doesn't exist)
+const KV_BYTES_DEFAULT = 2; // fallback if precision unknown
 
 // ═══════════════════════════════════════════════════════════
 //  STATE
@@ -231,6 +231,14 @@ async function fetchHFConfig() {
     setFieldVal('mContext', mappings.context);
     setFieldVal('mVocab',   mappings.vocab);
 
+    // Active params — only fill for MoE models
+    const activeP = inferActiveParams(cfg);
+    if (activeP !== null) {
+      setFieldVal('mActiveParams', activeP.toFixed(2));
+    } else {
+      document.getElementById('mActiveParams').value = '';
+    }
+
     statusEl.className = 'fetch-status ok';
     statusEl.textContent = `✓ Loaded ${cfg.model_type ?? modelId}`;
 
@@ -275,6 +283,33 @@ function inferParams(cfg) {
   return emb + L * (attn + 3 * H * FFN);
 }
 
+// Active params for MoE: only the experts that fire per token contribute to
+// memory bandwidth and FLOPs. Returns null for dense models (active = total).
+function inferActiveParams(cfg) {
+  const nRouted    = cfg.n_routed_experts ?? cfg.num_experts ?? 0;
+  const moeFFN     = cfg.moe_intermediate_size;
+  const activePerTok = cfg.num_experts_per_tok ?? cfg.n_activated_experts ?? null;
+  if (!moeFFN || !nRouted || activePerTok === null) return null;
+
+  const L = cfg.num_hidden_layers;
+  const H = cfg.hidden_size;
+  const V = cfg.vocab_size;
+  if (!L || !H || !V) return null;
+
+  const attn    = 4 * H * H;
+  const emb     = 2 * V * H;
+  const nShared = cfg.n_shared_experts ?? 0;
+  const freq    = cfg.moe_layer_freq ?? 1;
+  const moeLayers   = Math.ceil(L / freq);
+  const denseLayers = L - moeLayers;
+
+  const activeFFNPerMoeLayer = (activePerTok + nShared) * 3 * H * moeFFN;
+  const denseFFN = cfg.intermediate_size;
+  const ffnPerDenseLayer = denseFFN ? 3 * H * denseFFN : 0;
+
+  return (emb + moeLayers * (attn + activeFFNPerMoeLayer) + denseLayers * (attn + ffnPerDenseLayer)) / 1e9;
+}
+
 function setFieldVal(id, val) {
   const el = document.getElementById(id);
   if (val != null && val !== '') {
@@ -287,25 +322,26 @@ function setFieldVal(id, val) {
 // ═══════════════════════════════════════════════════════════
 function readModel() {
   return {
-    params:  +document.getElementById('mParams').value   || null,
-    layers:  +document.getElementById('mLayers').value   || null,
-    hidden:  +document.getElementById('mHidden').value   || null,
-    ffn:     +document.getElementById('mFFN').value      || null,
-    heads:   +document.getElementById('mHeads').value    || null,
-    kvHeads: +document.getElementById('mKVHeads').value  || null,
-    context: +document.getElementById('mContext').value  || null,
-    vocab:   +document.getElementById('mVocab').value    || null,
+    params:       +document.getElementById('mParams').value        || null,
+    activeParams: +document.getElementById('mActiveParams').value  || null,
+    layers:       +document.getElementById('mLayers').value        || null,
+    hidden:       +document.getElementById('mHidden').value        || null,
+    ffn:          +document.getElementById('mFFN').value           || null,
+    heads:        +document.getElementById('mHeads').value         || null,
+    kvHeads:      +document.getElementById('mKVHeads').value       || null,
+    context:      +document.getElementById('mContext').value       || null,
+    vocab:        +document.getElementById('mVocab').value         || null,
   };
 }
 
 function readBatch() {
   return {
     batch:  +document.getElementById('bBatch').value  || 32,
-    output: +document.getElementById('bOutput').value || 256,
+    output: +document.getElementById('bOutput').value || 2048,
   };
 }
 
-function calcVRAM(model, gpu, precision, gpuCount, batch) {
+function calcVRAM(model, gpu, precision, gpuCount, batch, seqLen) {
   const bytesPerParam = PREC_META[precision]?.bytes ?? 2;
   const totalVram = (gpu?.vram ?? 80) * gpuCount;
 
@@ -314,18 +350,23 @@ function calcVRAM(model, gpu, precision, gpuCount, batch) {
   const weightsGB = paramsB ? (paramsB * 1e9 * bytesPerParam) / 1e9 : null;
 
   // 2. KV Cache
-  // Per token: 2 (K+V) * layers * kvHeads * (hidden/heads) * KV_BYTES
+  // Per token: 2 (K+V) * layers * kvHeads * (hidden/heads) * kvBytes
+  // KV precision matches weight precision, floored at 1 byte (no 4-bit KV in practice)
+  const kvBytes = Math.max(1, bytesPerParam);
   let kvGB = null;
-  if (model.layers && model.kvHeads && model.hidden && model.heads && model.context) {
+  const kvSeq = seqLen || model.context;
+  if (model.layers && model.kvHeads && model.hidden && model.heads && kvSeq) {
     const headDim = model.hidden / model.heads;
-    const kvPerToken = 2 * model.layers * model.kvHeads * headDim * KV_BYTES;
-    kvGB = (kvPerToken * model.context * batch) / 1e9;
+    const kvPerToken = 2 * model.layers * model.kvHeads * headDim * kvBytes;
+    kvGB = (kvPerToken * kvSeq * batch) / 1e9;
   }
 
-  // 3. Activations (rough: hidden * context * batch * 4 bytes, peak during fwd pass)
+  // 3. Activations (peak prefill: hidden * seq_len * batch * 4 bytes)
+  // Decode-phase activations are per-token and negligible; this models the prefill peak.
   let actGB = null;
-  if (model.hidden && model.context) {
-    actGB = (model.hidden * model.context * batch * 4) / 1e9;
+  const actSeq = seqLen || model.context;
+  if (model.hidden && actSeq) {
+    actGB = (model.hidden * actSeq * batch * 4) / 1e9;
   }
 
   // 4. CUDA overhead (fixed)
@@ -358,8 +399,11 @@ function calcThroughput(model, gpu, precision, gpuCount, batch) {
   // Effective memory bandwidth across N GPUs (BW scales with GPU count for TP)
   const bwGBs = (gpu.bw ?? 3350) * gpuCount;
 
-  const paramsB = model.params ?? estimateParams(model);
-  if (!paramsB) return null;
+  const totalParamsB = model.params ?? estimateParams(model);
+  if (!totalParamsB) return null;
+
+  // For MoE: active params drive BW and FLOPs per token; total params size VRAM
+  const paramsB = model.activeParams ?? totalParamsB;
 
   const bytesPerParam = PREC_META[prec]?.bytes ?? 2;
   const modelBytes = paramsB * 1e9 * bytesPerParam;
@@ -367,7 +411,7 @@ function calcThroughput(model, gpu, precision, gpuCount, batch) {
   // Arithmetic intensity threshold (ops/byte) = TFLOPS / BW
   const ridgePoint = (tflops * 1e12) / (bwGBs * 1e9); // ops/byte
 
-  // Decode step: per-token FLOPs ≈ 2 * params (each param touched once)
+  // Decode step: per-token FLOPs ≈ 2 * active_params (each active weight touched once)
   const flopsPerToken = 2 * paramsB * 1e9;
 
   // Memory-bound time per token (decode): load all weights from VRAM
@@ -416,6 +460,80 @@ function calcThroughput(model, gpu, precision, gpuCount, batch) {
 }
 
 // ═══════════════════════════════════════════════════════════
+//  SCENARIOS
+// ═══════════════════════════════════════════════════════════
+function calcMaxBatch(model, gpu, precision, gpuCount, seqLen) {
+  const bytesPerParam = PREC_META[precision]?.bytes ?? 2;
+  const totalVram = (gpu?.vram ?? 80) * gpuCount;
+  const paramsB = model.params ?? estimateParams(model);
+  if (!paramsB) return 1;
+
+  const weightsGB = (paramsB * 1e9 * bytesPerParam) / 1e9;
+  const freeGB = totalVram - weightsGB - 1.0; // minus CUDA overhead
+  if (freeGB <= 0) return 1;
+
+  const kvBytes = Math.max(1, bytesPerParam);
+  let perReqGB = 0;
+  if (model.layers && model.kvHeads && model.hidden && model.heads && seqLen) {
+    const headDim = model.hidden / model.heads;
+    perReqGB += (2 * model.layers * model.kvHeads * headDim * kvBytes * seqLen) / 1e9;
+  }
+  if (model.hidden && seqLen) {
+    perReqGB += (model.hidden * seqLen * 4) / 1e9;
+  }
+  if (perReqGB <= 0) return Math.max(1, Math.floor(freeGB / 0.1)); // fallback
+
+  return Math.max(1, Math.floor(freeGB / perReqGB));
+}
+
+function renderScenarios(model, gpu, precision, gpuCount, seqLen) {
+  const panel = document.getElementById('scenariosPanel');
+  const tp = calcThroughput(model, gpu, precision, gpuCount, 1);
+  if (!tp) {
+    panel.className = 'scenarios-empty';
+    panel.innerHTML = '— configure GPU &amp; model —';
+    return;
+  }
+
+  const maxBatch = calcMaxBatch(model, gpu, precision, gpuCount, seqLen);
+  const tpMax    = calcThroughput(model, gpu, precision, gpuCount, maxBatch);
+  const tpMid    = calcThroughput(model, gpu, precision, gpuCount, 32);
+
+  const rows = [
+    {
+      label: 'Min Latency',
+      sub:   'batch 1 · lowest response time',
+      tps:   tp.tps,
+      cls:   'best',
+      tip:   'Batch=1: one user, no queuing. The GPU streams all weights once per token — pure memory-bandwidth limit.\n\nFormula: BW × N_GPUs / model_bytes × MFU\n\nThis is the fastest a single user can receive tokens. Latency is minimized; GPU utilization is low.',
+    },
+    {
+      label: 'Balanced',
+      sub:   'batch 32 · production baseline',
+      tps:   tpMid?.tps ?? 0,
+      cls:   '',
+      tip:   'Batch=32: a reasonable continuous-batching baseline for a production API.\n\nThroughput scales linearly with batch while memory-bound. Each user waits slightly longer, but the system serves 32× more tokens per second than batch=1.\n\nTypical starting point for vLLM / TRT-LLM deployments.',
+    },
+    {
+      label: 'Max Throughput',
+      sub:   `batch ${maxBatch} · VRAM ceiling`,
+      tps:   tpMax?.tps ?? 0,
+      cls:   'worst',
+      tip:   `Batch=${maxBatch}: the largest batch that fits in VRAM given your seq length.\n\nFree VRAM after weights is divided by (KV cache + activations) per request at the configured seq length.\n\nHighest total tokens/sec for the system, but each user's response latency is highest. Beyond this batch size the model OOMs.`,
+    },
+  ];
+
+  panel.className = '';
+  panel.innerHTML = rows.map(r => `
+    <div class="scenario-row">
+      <span class="scenario-name">${r.label} <i class="tip" data-tip="${r.tip}"></i></span>
+      <span class="scenario-sub">${r.sub}</span>
+      <span class="scenario-tps ${r.cls}">${r.tps.toLocaleString()} <span class="scenario-unit">tok/s</span></span>
+    </div>
+  `).join('');
+}
+
+// ═══════════════════════════════════════════════════════════
 //  MAIN RECALCULATE
 // ═══════════════════════════════════════════════════════════
 function recalculate() {
@@ -432,6 +550,8 @@ function recalculate() {
   const hasGPU   = !!gpu;
   const hasModel = !!(model.params || (model.layers && model.hidden && model.ffn));
 
+  renderScenarios(model, gpu, prec, N, batch.output);
+
   if (!hasGPU || !hasModel) {
     document.getElementById('emptyState').style.display = 'flex';
     document.getElementById('outputPanel').querySelectorAll('.results-block').forEach(e => e.remove());
@@ -440,7 +560,7 @@ function recalculate() {
 
   document.getElementById('emptyState').style.display = 'none';
 
-  const vram    = calcVRAM(model, gpu, prec, N, batch.batch);
+  const vram    = calcVRAM(model, gpu, prec, N, batch.batch, batch.output);
   const throughput = calcThroughput(model, gpu, prec, N, batch.batch);
 
   renderResults(model, gpu, prec, N, batch, vram, throughput);
@@ -462,22 +582,39 @@ function renderResults(model, gpu, prec, N, batch, vram, tp) {
   const utilVal = tp ? tp.flopsUtil.toFixed(1) + '%' : '—';
   const modelGB = vram.weightsGB ? vram.weightsGB.toFixed(1) : '—';
 
+  // Cost card — uses Balanced (batch=32) TPS as the pricing anchor
+  const costPerHr = (+document.getElementById('gpuCostPerHr').value || 2.50) * N;
+  const tpBalanced = calcThroughput(model, gpu, prec, N, 32);
+  let costVal = '—', costSub = '';
+  if (tpBalanced) {
+    const cPerMTok = (costPerHr / (tpBalanced.tps * 3600)) * 1e6;
+    costVal = cPerMTok < 1
+      ? '$' + cPerMTok.toFixed(3)
+      : '$' + cPerMTok.toFixed(2);
+    costSub = `per M output tokens · batch 32 · $${costPerHr.toFixed(2)}/hr`;
+  }
+
   heroEl.innerHTML = `
     <div class="hero">
       <div class="metric-card primary">
-        <div class="metric-label">Tokens / Second</div>
+        <div class="metric-label">Tokens / Second <i class="tip" data-tip="Roofline minimum of memory-bound and compute-bound limits, with MFU applied.\n\nMemory-bound: (BW × N_GPUs) / model_bytes × batch\nCompute-bound: (TFLOPS × N_GPUs × MFU) / (2 × params / batch)\n\nDecode is almost always memory-bound. Large prefill batches can cross into compute-bound."></i></div>
         <div class="metric-value" id="tpsVal">${tpsVal}</div>
         <div class="metric-sub">${tpsSub}</div>
       </div>
       <div class="metric-card">
-        <div class="metric-label">FLOPS Utilization</div>
+        <div class="metric-label">FLOPS Utilization <i class="tip" data-tip="How much of peak TFLOPS the workload actually uses.\n\nActual TFLOPS = 2 × params × TPS ÷ 1e12\nPeak TFLOPS = GPU peak × N_GPUs × MFU\n\nLow % is normal for memory-bound decode — the GPU sits idle waiting for weights to stream in. High % indicates compute-bound prefill."></i></div>
         <div class="metric-value">${utilVal}</div>
         <div class="metric-sub">of ${tp ? tp.peakTFLOPS.toFixed(0) : '—'} TFLOPS peak</div>
       </div>
       <div class="metric-card">
-        <div class="metric-label">Model Footprint</div>
+        <div class="metric-label">Model Footprint <i class="tip" data-tip="Weight-only VRAM: params × bytes_per_param.\n\nDoes not include KV cache, activations, or CUDA overhead — those are shown in the VRAM breakdown below.\n\nFormula: params_B × 1e9 × bytes/param ÷ 1e9"></i></div>
         <div class="metric-value">${modelGB} <span style="font-size:1rem;color:var(--text-dim)">GB</span></div>
         <div class="metric-sub">of ${vram.totalVram} GB total VRAM</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Output Token Cost <i class="tip" data-tip="Cost per million output tokens at Balanced throughput (batch=32).\n\nFormula: (GPU $/hr × GPU count) ÷ (balanced_TPS × 3600) × 1,000,000\n\nOutput tokens dominate inference cost — they are generated sequentially, one at a time. Input (prefill) tokens are ~5–10× cheaper to process and are not included here.\n\nAdjust GPU Cost ($/hr) in the GPU Configuration section."></i></div>
+        <div class="metric-value">${costVal}</div>
+        <div class="metric-sub">${costSub}</div>
       </div>
     </div>
   `;
@@ -554,11 +691,19 @@ function renderResults(model, gpu, prec, N, batch, vram, tp) {
   const vramEl = mkEl('div', 'results-block viz-card');
   vramEl.innerHTML = buildVRAMHTML(vram);
   panel.appendChild(vramEl);
+  // Animate segments: start at 0%, then set target widths after paint
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      vramEl.querySelectorAll('.vram-seg[data-pct]').forEach(seg => {
+        seg.style.width = seg.dataset.pct + '%';
+      });
+    });
+  });
 
   // ── Breakdown Table ──
   if (tp) {
     const bkEl = mkEl('div', 'results-block viz-card');
-    bkEl.innerHTML = buildBreakdownHTML(model, gpu, prec, N, batch, tp, vram);
+    bkEl.innerHTML = buildBreakdownHTML(tp, model);
     panel.appendChild(bkEl);
   }
 }
@@ -574,7 +719,7 @@ function buildVRAMHTML(v) {
 
   const segHTML = segs.map(s => {
     const pct = Math.min(100, (s.gb / total) * 100);
-    return `<div class="vram-seg ${s.cls}" style="width:${pct}%"></div>`;
+    return `<div class="vram-seg ${s.cls}" style="width:0%" data-pct="${pct}"></div>`;
   }).join('');
 
   const freeGBDisplay = Math.max(0, v.freeGB).toFixed(1);
@@ -609,21 +754,16 @@ function buildVRAMHTML(v) {
   `;
 }
 
-function buildBreakdownHTML(model, gpu, prec, N, batch, tp, vram) {
-  const paramsB = model.params ?? (vram.weightsGB ? (vram.weightsGB / PREC_META[prec].bytes) : null);
+function buildBreakdownHTML(tp, model) {
+  const isMoE = model.activeParams && model.params && model.activeParams < model.params;
   const rows = [
-    ['Model Params',         paramsB ? paramsB.toFixed(2)+'B' : '—'],
-    ['Bytes / Param',        PREC_META[prec].bytes],
-    ['Weight Memory',        vram.weightsGB ? vram.weightsGB.toFixed(2)+' GB' : '—'],
-    ['KV Cache Memory',      vram.kvGB ? vram.kvGB.toFixed(2)+' GB' : '—'],
-    ['Peak Compute',         tp.peakTFLOPS.toFixed(0)+' TFLOPS'],
-    ['Mem Bandwidth',        (tp.bwGBs/1000).toFixed(2)+' TB/s'],
-    ['Ridge Point',          tp.ridgePoint.toFixed(0)+' ops/byte'],
-    ['Arith. Intensity',     tp.arithIntensity.toFixed(0)+' ops/byte'],
-    ['MFU',                  (tp.mfu*100).toFixed(0)+'%'],
-    ['Batch Size',           batch.batch],
-    ['Context Length',       model.context ? model.context.toLocaleString() : '—'],
-    ['GPU Count (TP)',       N],
+    ...(isMoE ? [
+      ['Total Params',     model.params.toFixed(2)+' B'],
+      ['Active Params',    model.activeParams.toFixed(2)+' B  ← MoE: drives BW & FLOPs'],
+    ] : []),
+    ['Mem Bandwidth',    (tp.bwGBs/1000).toFixed(2)+' TB/s'],
+    ['Ridge Point',      tp.ridgePoint.toFixed(0)+' ops/byte'],
+    ['Arith. Intensity', tp.arithIntensity.toFixed(0)+' ops/byte'],
   ];
 
   const rowsHTML = rows.map(([l,v]) => `
@@ -776,5 +916,40 @@ document.addEventListener('DOMContentLoaded', () => {
         recalculate();
       }
     });
+  });
+
+  // Floating tooltip — delegated so it works on dynamically rendered .tip icons too
+  const tipFloat = document.createElement('div');
+  tipFloat.id = 'tip-float';
+  document.body.appendChild(tipFloat);
+
+  function showTip(el) {
+    const text = el.getAttribute('data-tip');
+    if (!text) return;
+    tipFloat.textContent = text;
+    tipFloat.style.display = 'block';
+
+    const r = el.getBoundingClientRect();
+    const GAP = 8;
+    const TIP_W = 260;
+    const TIP_H = tipFloat.offsetHeight;
+
+    let left = r.left;
+    if (left + TIP_W > window.innerWidth - 8) left = window.innerWidth - TIP_W - 8;
+    if (left < 8) left = 8;
+
+    let top = r.top - TIP_H - GAP;
+    if (top < 8) top = r.bottom + GAP;
+
+    tipFloat.style.left = left + 'px';
+    tipFloat.style.top  = top  + 'px';
+  }
+
+  document.body.addEventListener('mouseover', e => {
+    const tip = e.target.closest('.tip');
+    if (tip) showTip(tip);
+  });
+  document.body.addEventListener('mouseout', e => {
+    if (e.target.closest('.tip')) tipFloat.style.display = 'none';
   });
 });

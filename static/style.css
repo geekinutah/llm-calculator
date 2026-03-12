@@ -283,7 +283,7 @@
   /* Hero metric */
   .hero {
     display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
     gap: 1rem;
   }
   .metric-card {
@@ -306,6 +306,9 @@
     letter-spacing: 0.12em;
     text-transform: uppercase;
     color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
   }
   .metric-value {
     font-family: var(--font-mono);
@@ -591,29 +594,6 @@
   ::-webkit-scrollbar-track { background: var(--bg); }
   ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
 
-  /* ── Tooltip ─────────────────────────────────────────── */
-  [data-tip] { position: relative; cursor: help; }
-  [data-tip]::after {
-    content: attr(data-tip);
-    position: absolute;
-    bottom: calc(100% + 6px);
-    left: 50%;
-    transform: translateX(-50%);
-    background: var(--bg3);
-    border: 1px solid var(--border2);
-    border-radius: var(--radius);
-    color: var(--text);
-    font-family: var(--font-mono);
-    font-size: 0.65rem;
-    line-height: 1.5;
-    padding: 0.4rem 0.6rem;
-    white-space: nowrap;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.15s;
-    z-index: 200;
-  }
-  [data-tip]:hover::after { opacity: 1; }
 
   /* ── Animations ──────────────────────────────────────── */
   @keyframes fadeIn {
@@ -624,11 +604,171 @@
     animation: fadeIn 0.3s ease forwards;
   }
 
+  /* ── Tooltips ────────────────────────────────────────── */
+  label {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+  .tip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    background: var(--border2);
+    color: var(--text-dim);
+    font-size: 8px;
+    font-family: var(--font-mono);
+    font-style: normal;
+    cursor: default;
+    flex-shrink: 0;
+    position: relative;
+    user-select: none;
+    transition: background 0.15s, color 0.15s;
+  }
+  .tip:hover {
+    background: var(--accent2);
+    color: #000;
+  }
+  /* Tooltip content is rendered by JS into #tip-float to escape overflow clipping */
+  #tip-float {
+    position: fixed;
+    z-index: 9999;
+    background: var(--bg3);
+    border: 1px solid var(--border2);
+    color: var(--text);
+    padding: 0.6rem 0.75rem;
+    border-radius: var(--radius);
+    font-size: 0.68rem;
+    line-height: 1.6;
+    white-space: pre-line;
+    width: 260px;
+    pointer-events: none;
+    font-family: var(--font-sans);
+    font-weight: 400;
+    letter-spacing: 0;
+    text-transform: none;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    display: none;
+  }
+
+  /* ── Throughput Scenarios ────────────────────────────── */
+  .scenarios-empty {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    color: var(--text-dim);
+    text-align: center;
+    padding: 0.75rem 0;
+  }
+  .scenario-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    align-items: baseline;
+    gap: 0.5rem;
+    padding: 0.4rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .scenario-row:last-child { border-bottom: none; }
+  .scenario-name {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    color: var(--text-mid);
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+  }
+  .scenario-sub {
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    color: var(--text-dim);
+    white-space: nowrap;
+  }
+  .scenario-tps {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    text-align: right;
+  }
+  .scenario-tps.best  { color: var(--green); }
+  .scenario-tps.worst { color: var(--accent); }
+  .scenario-unit {
+    font-size: 0.6rem;
+    font-weight: 400;
+    color: var(--text-dim);
+  }
+
+  /* ── HuggingFace Autocomplete Dropdown ──────────────────── */
+  .hf-dropdown {
+    display: none;
+    position: fixed;
+    z-index: 9998;
+    background: var(--bg3);
+    border: 1px solid var(--border2);
+    border-radius: var(--radius);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    overflow-y: auto;
+    max-height: 260px;
+  }
+  .hf-item {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+    transition: background 0.1s;
+  }
+  .hf-item:last-child { border-bottom: none; }
+  .hf-item:hover, .hf-item.hf-active {
+    background: rgba(0,153,204,0.12);
+  }
+  .hf-item-id {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+  }
+  .hf-item-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-shrink: 0;
+  }
+  .hf-tag {
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    color: var(--text-dim);
+    background: var(--border);
+    padding: 0.1rem 0.35rem;
+    border-radius: 2px;
+    white-space: nowrap;
+  }
+  .hf-dl {
+    font-family: var(--font-mono);
+    font-size: 0.63rem;
+    color: var(--text-dim);
+    white-space: nowrap;
+  }
+  mark.hf-hl {
+    background: none;
+    color: var(--accent);
+    font-weight: 600;
+  }
+
   /* Responsive */
   @media (max-width: 900px) {
     .layout { grid-template-columns: 1fr; }
     .panel-inputs { border-right: none; border-bottom: 1px solid var(--border); }
-    .hero { grid-template-columns: 1fr 1fr; }
+    .hero { grid-template-columns: 1fr 1fr; gap: 0.75rem; }
     .vram-legend { grid-template-columns: repeat(3, 1fr); }
     .breakdown-grid { grid-template-columns: 1fr; }
     .gauge-wrap { flex-direction: column; align-items: flex-start; }
