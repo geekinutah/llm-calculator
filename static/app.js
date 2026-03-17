@@ -2,34 +2,10 @@
 //  GPU DATABASE
 // ═══════════════════════════════════════════════════════════
 const GPU_DB = {
-  h100: {
-    name: 'H100 SXM',
-    vram: 80,
-    bw: 3350,      // GB/s
-    fp32: 67,      // TFLOPS
-    bf16: 989,
-    fp16: 989,
-    fp8: 1979,
-    int8: 1979,
-    int4: 1979,    // software dequant, no hardware gain over int8
-    fp4: null,
-    nvlink: 900,
-  },
-  h200: {
-    name: 'H200 SXM',
-    vram: 141,
-    bw: 4800,
-    fp32: 67,
-    bf16: 989,
-    fp16: 989,
-    fp8: 1979,
-    int8: 1979,
-    int4: 1979,
-    fp4: null,
-    nvlink: 900,
-  },
+  // ── Blackwell ──────────────────────────────────────────────
   b200: {
     name: 'B200 SXM ★',
+    arch: 'blackwell',
     vram: 192,
     bw: 8000,
     fp32: 90,
@@ -39,21 +15,66 @@ const GPU_DB = {
     int8: 4500,
     int4: 4500,
     fp4: 9000,
-    nvlink: 1800,
+    interconnect: { nvlink_gbps: 1800, pcie_gen: 5 },
     estimated: true,
   },
+  // ── Hopper ─────────────────────────────────────────────────
+  h200: {
+    name: 'H200 SXM',
+    arch: 'hopper',
+    vram: 141,
+    bw: 4800,
+    fp32: 67,
+    bf16: 989,
+    fp16: 989,
+    fp8: 1979,
+    int8: 1979,
+    int4: 1979,
+    fp4: null,
+    interconnect: { nvlink_gbps: 900, pcie_gen: 5 },
+  },
+  h100: {
+    name: 'H100 SXM',
+    arch: 'hopper',
+    vram: 80,
+    bw: 3350,
+    fp32: 67,
+    bf16: 989,
+    fp16: 989,
+    fp8: 1979,
+    int8: 1979,
+    int4: 1979,    // software dequant, no hardware gain over int8
+    fp4: null,
+    interconnect: { nvlink_gbps: 900, pcie_gen: 5 },
+  },
+  // ── Ampere ─────────────────────────────────────────────────
   a100: {
     name: 'A100 SXM',
+    arch: 'ampere',
     vram: 80,
     bw: 2000,
     fp32: 19.5,
     bf16: 312,
     fp16: 312,
-    fp8: null,     // not supported
+    fp8: null,     // not supported on Ampere
     int8: 624,
     int4: 624,     // software dequant
     fp4: null,
-    nvlink: 600,
+    interconnect: { nvlink_gbps: 600, pcie_gen: 4 },
+  },
+  a100_pcie: {
+    name: 'A100 PCIe',
+    arch: 'ampere',
+    vram: 80,
+    bw: 1935,      // HBM2e — PCIe variant is ~3% slower than SXM
+    fp32: 19.5,
+    bf16: 312,
+    fp16: 312,
+    fp8: null,     // not supported on Ampere
+    int8: 624,
+    int4: 624,     // software dequant
+    fp4: null,
+    interconnect: { nvlink_gbps: null, pcie_gen: 4 },
   },
 };
 
@@ -67,9 +88,6 @@ const PREC_META = {
   int4: { bytes: 0.5, label: 'INT4', softwareOnly: true },
   fp4:  { bytes: 0.5, label: 'FP4' },
 };
-
-// KV cache uses same precision as model weights (floored at 1 byte — 4-bit KV doesn't exist)
-const KV_BYTES_DEFAULT = 2; // fallback if precision unknown
 
 // ═══════════════════════════════════════════════════════════
 //  STATE
@@ -110,6 +128,7 @@ function onGpuChange() {
   }
 
   disclaimer.classList.toggle('show', v === 'b200');
+  updatePcieWarning();
   updatePrecisionPills();
   recalculate();
 }
@@ -132,7 +151,14 @@ function buildCustomGpu() {
 function stepGpu(d) {
   state.gpuCount = Math.max(1, Math.min(16, state.gpuCount + d));
   document.getElementById('gpuCountVal').textContent = state.gpuCount;
+  updatePcieWarning();
   recalculate();
+}
+
+function updatePcieWarning() {
+  const noNvlink = state.gpu?.interconnect?.nvlink_gbps == null;
+  const show = !!state.gpu && noNvlink && state.gpuCount > 1;
+  document.getElementById('pcieDisclaimer').classList.toggle('show', show);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -722,7 +748,6 @@ function buildVRAMHTML(v) {
     return `<div class="vram-seg ${s.cls}" style="width:0%" data-pct="${pct}"></div>`;
   }).join('');
 
-  const freeGBDisplay = Math.max(0, v.freeGB).toFixed(1);
   const overflowPct = v.overflow > 0 ? Math.min(100, (v.overflow / total) * 100) : 0;
 
   // Legend entries
@@ -905,9 +930,16 @@ function mkEl(tag, cls) {
 }
 
 // ═══════════════════════════════════════════════════════════
+//  EXPORTS (Node.js / test harness)
+// ═══════════════════════════════════════════════════════════
+if (typeof module !== 'undefined') {
+  module.exports = { GPU_DB, PREC_META, getTFLOPS, estimateParams, calcVRAM, calcThroughput, calcMaxBatch };
+}
+
+// ═══════════════════════════════════════════════════════════
 //  INIT
 // ═══════════════════════════════════════════════════════════
-document.addEventListener('DOMContentLoaded', () => {
+if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => {
   // Wire up input events for custom gpu fields
   ['cVram','cBw','cBf16','cFp8','cFp4','cInt8'].forEach(id => {
     document.getElementById(id).addEventListener('input', () => {

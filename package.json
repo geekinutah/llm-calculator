@@ -1,0 +1,8 @@
+{
+  "name": "llm-calculator",
+  "version": "1.0.0",
+  "scripts": {
+    "test": "node tests/unit.js",
+    "validate": "node tests/validate.js"
+  }
+}

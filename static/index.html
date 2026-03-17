@@ -29,13 +29,16 @@
         <label>GPU Model</label>
         <select id="gpuSelect" onchange="onGpuChange()">
           <option value="">— select GPU —</option>
-          <optgroup label="Data Center (Hopper/Blackwell)">
-            <option value="h100">NVIDIA H100 SXM — 80 GB HBM3</option>
-            <option value="h200">NVIDIA H200 SXM — 141 GB HBM3e</option>
+          <optgroup label="Blackwell">
             <option value="b200">NVIDIA B200 SXM — 192 GB HBM3e ★</option>
           </optgroup>
-          <optgroup label="Data Center (Ampere)">
+          <optgroup label="Hopper">
+            <option value="h200">NVIDIA H200 SXM — 141 GB HBM3e</option>
+            <option value="h100">NVIDIA H100 SXM — 80 GB HBM3</option>
+          </optgroup>
+          <optgroup label="Ampere">
             <option value="a100">NVIDIA A100 SXM — 80 GB HBM2e</option>
+            <option value="a100_pcie">NVIDIA A100 PCIe — 80 GB HBM2e</option>
           </optgroup>
           <option value="custom">Custom GPU…</option>
         </select>
@@ -72,6 +75,9 @@
 
       <div class="disclaimer" id="b200Disclaimer" style="margin-top:0.6rem">
         ★ B200 TFLOPS figures are estimates from NVIDIA GTC 2024 keynote. Independent MLPerf benchmarks pending.
+      </div>
+      <div class="disclaimer" id="pcieDisclaimer" style="margin-top:0.6rem">
+        ⚠ A100 PCIe has no NVLink. Multi-GPU tensor parallelism uses PCIe Gen4 x16 (~64 GB/s) — expect significant TP overhead vs NVLink (600 GB/s). Single-GPU inference is unaffected.
       </div>
 
       <div class="input-group" style="margin-top:0.75rem">
