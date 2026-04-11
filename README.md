@@ -8,11 +8,16 @@ and all major precisions (FP32 → FP4).
 
 ```
 llm-calculator/
-├── server.py           # Zero-dep Python stdlib HTTP server
+├── server.py           # Zero-dep Python stdlib HTTP server (dev only; not used on Cloudflare Pages)
 ├── static/
 │   ├── index.html      # HTML structure
 │   ├── style.css       # Styles
-│   └── app.js          # Calculator logic
+│   ├── gpus.js         # GPU database — add new GPUs here
+│   ├── app.js          # Calculator logic and UI
+│   └── huggingface.js  # HuggingFace model ID autocomplete
+├── tests/
+│   ├── unit.js         # Mathematical invariant tests (npm test)
+│   └── validate.js     # Benchmark comparison against known values
 ├── Dockerfile
 ├── docker-compose.yml
 └── k8s/
@@ -69,6 +74,32 @@ docker compose up
    kubectl rollout status deployment/llm-calculator
    kubectl get pods -l app=llm-calculator
    ```
+
+## Adding GPUs
+
+All GPU data lives in `static/gpus.js`. To add a new GPU, append an entry to `GPU_DB`:
+
+```js
+rtx_5090: {
+  name: 'RTX 5090',
+  arch: 'blackwell',   // controls <optgroup> label
+  archOrder: 10,       // lower = appears first in the dropdown
+  category: 'consumer',
+  memType: 'GDDR7',
+  vram: 32,
+  bw: 1792,
+  fp32: 108,
+  bf16: 838,
+  fp16: 838,
+  fp8: 1676,
+  int8: 1676,
+  int4: 1676,
+  fp4: 3352,
+  interconnect: { nvlink_gbps: null, pcie_gen: 5 },
+},
+```
+
+No HTML or `app.js` changes are needed — the dropdown is generated dynamically from `GPU_DB` on page load.
 
 ## Configuration
 

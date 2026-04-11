@@ -6,6 +6,10 @@
 //  an exact value derived from the formulas in app.js — not a
 //  range check, not a benchmark comparison (see validate.js).
 //
+//  GPU data (GPU_DB, PREC_META) comes from static/gpus.js.
+//  Calculator functions (calcVRAM, calcThroughput, etc.) come
+//  from static/app.js.
+//
 //  Run: npm test  |  node tests/unit.js
 //  Requires Node 18+ (uses node:test built-in)
 // ═══════════════════════════════════════════════════════════
