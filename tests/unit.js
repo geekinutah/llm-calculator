@@ -13,10 +13,10 @@
 const { test } = require('node:test');
 const assert   = require('assert/strict');
 const {
-  GPU_DB, PREC_META,
   getTFLOPS, estimateParams,
   calcVRAM, calcThroughput, calcMaxBatch,
 } = require('../static/app.js');
+const { GPU_DB, PREC_META } = require('../static/gpus.js');
 
 // ── Shared fixtures ──────────────────────────────────────────
 //

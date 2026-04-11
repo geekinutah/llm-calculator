@@ -1,93 +1,15 @@
 // ═══════════════════════════════════════════════════════════
-//  GPU DATABASE
+//  GPU DATA  (browser: loaded from gpus.js <script> tag)
+//            (Node.js: require'd here so app.js is self-contained)
 // ═══════════════════════════════════════════════════════════
-const GPU_DB = {
-  // ── Blackwell ──────────────────────────────────────────────
-  b200: {
-    name: 'B200 SXM ★',
-    arch: 'blackwell',
-    vram: 192,
-    bw: 8000,
-    fp32: 90,
-    bf16: 2250,
-    fp16: 2250,
-    fp8: 4500,
-    int8: 4500,
-    int4: 4500,
-    fp4: 9000,
-    interconnect: { nvlink_gbps: 1800, pcie_gen: 5 },
-    estimated: true,
-  },
-  // ── Hopper ─────────────────────────────────────────────────
-  h200: {
-    name: 'H200 SXM',
-    arch: 'hopper',
-    vram: 141,
-    bw: 4800,
-    fp32: 67,
-    bf16: 989,
-    fp16: 989,
-    fp8: 1979,
-    int8: 1979,
-    int4: 1979,
-    fp4: null,
-    interconnect: { nvlink_gbps: 900, pcie_gen: 5 },
-  },
-  h100: {
-    name: 'H100 SXM',
-    arch: 'hopper',
-    vram: 80,
-    bw: 3350,
-    fp32: 67,
-    bf16: 989,
-    fp16: 989,
-    fp8: 1979,
-    int8: 1979,
-    int4: 1979,    // software dequant, no hardware gain over int8
-    fp4: null,
-    interconnect: { nvlink_gbps: 900, pcie_gen: 5 },
-  },
-  // ── Ampere ─────────────────────────────────────────────────
-  a100: {
-    name: 'A100 SXM',
-    arch: 'ampere',
-    vram: 80,
-    bw: 2000,
-    fp32: 19.5,
-    bf16: 312,
-    fp16: 312,
-    fp8: null,     // not supported on Ampere
-    int8: 624,
-    int4: 624,     // software dequant
-    fp4: null,
-    interconnect: { nvlink_gbps: 600, pcie_gen: 4 },
-  },
-  a100_pcie: {
-    name: 'A100 PCIe',
-    arch: 'ampere',
-    vram: 80,
-    bw: 1935,      // HBM2e — PCIe variant is ~3% slower than SXM
-    fp32: 19.5,
-    bf16: 312,
-    fp16: 312,
-    fp8: null,     // not supported on Ampere
-    int8: 624,
-    int4: 624,     // software dequant
-    fp4: null,
-    interconnect: { nvlink_gbps: null, pcie_gen: 4 },
-  },
-};
-
-// Precision metadata
-const PREC_META = {
-  fp32: { bytes: 4, label: 'FP32' },
-  bf16: { bytes: 2, label: 'BF16' },
-  fp16: { bytes: 2, label: 'FP16' },
-  fp8:  { bytes: 1, label: 'FP8' },
-  int8: { bytes: 1, label: 'INT8' },
-  int4: { bytes: 0.5, label: 'INT4', softwareOnly: true },
-  fp4:  { bytes: 0.5, label: 'FP4' },
-};
+if (typeof module !== 'undefined') {
+  // In Node.js: load GPU_DB and PREC_META from gpus.js.
+  // Using global assignment (not var) to avoid var-hoisting conflicting
+  // with the const declarations in gpus.js when loaded as a browser <script>.
+  const _gpus = require('./gpus.js');
+  global.GPU_DB = _gpus.GPU_DB;
+  global.PREC_META = _gpus.PREC_META;
+}
 
 // ═══════════════════════════════════════════════════════════
 //  STATE
@@ -127,7 +49,7 @@ function onGpuChange() {
     state.gpu = null;
   }
 
-  disclaimer.classList.toggle('show', v === 'b200');
+  disclaimer.classList.toggle('show', !!(v && GPU_DB[v]?.estimated));
   updatePcieWarning();
   updatePrecisionPills();
   recalculate();
@@ -921,6 +843,47 @@ function drawGauge(pct) {
 }
 
 // ═══════════════════════════════════════════════════════════
+//  GPU DROPDOWN RENDERER
+// ═══════════════════════════════════════════════════════════
+function renderGpuDropdown() {
+  const select = document.getElementById('gpuSelect');
+
+  // Build map: arch → { order, entries: [[id, gpu], ...] }
+  const archMap = {};
+  for (const [id, gpu] of Object.entries(GPU_DB)) {
+    const arch = gpu.arch;
+    if (!archMap[arch]) archMap[arch] = { order: gpu.archOrder ?? 99, entries: [] };
+    archMap[arch].entries.push([id, gpu]);
+  }
+
+  // Sort archs by archOrder, GPUs within each arch by VRAM descending
+  const sortedArchs = Object.entries(archMap)
+    .sort(([, a], [, b]) => a.order - b.order);
+  for (const [, group] of sortedArchs) {
+    group.entries.sort(([, a], [, b]) => b.vram - a.vram);
+  }
+
+  // Remove existing optgroups; leave placeholder ('') and 'custom' options intact
+  select.querySelectorAll('optgroup').forEach(g => g.remove());
+  select.querySelectorAll('option:not([value=""]):not([value="custom"])').forEach(o => o.remove());
+
+  const customOption = select.querySelector('option[value="custom"]');
+  for (const [arch, group] of sortedArchs) {
+    const optgroup = document.createElement('optgroup');
+    optgroup.label = arch.charAt(0).toUpperCase() + arch.slice(1);
+    for (const [id, gpu] of group.entries) {
+      const opt = document.createElement('option');
+      opt.value = id;
+      // gpu.name already includes ★ for entries with estimated:true
+      const memPart = gpu.memType ? ` — ${gpu.vram} GB ${gpu.memType}` : ` — ${gpu.vram} GB`;
+      opt.textContent = `NVIDIA ${gpu.name}${memPart}`;
+      optgroup.appendChild(opt);
+    }
+    select.insertBefore(optgroup, customOption);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
 //  UTILS
 // ═══════════════════════════════════════════════════════════
 function mkEl(tag, cls) {
@@ -933,13 +896,16 @@ function mkEl(tag, cls) {
 //  EXPORTS (Node.js / test harness)
 // ═══════════════════════════════════════════════════════════
 if (typeof module !== 'undefined') {
-  module.exports = { GPU_DB, PREC_META, getTFLOPS, estimateParams, calcVRAM, calcThroughput, calcMaxBatch };
+  module.exports = { getTFLOPS, estimateParams, calcVRAM, calcThroughput, calcMaxBatch };
 }
 
 // ═══════════════════════════════════════════════════════════
 //  INIT
 // ═══════════════════════════════════════════════════════════
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => {
+  // Populate GPU dropdown from GPU_DB
+  renderGpuDropdown();
+
   // Wire up input events for custom gpu fields
   ['cVram','cBw','cBf16','cFp8','cFp4','cInt8'].forEach(id => {
     document.getElementById(id).addEventListener('input', () => {
