@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 
-LABEL maintainer="llm-calculator"
+LABEL org.opencontainers.image.authors="Mike Wilson <geekinutah@gmail.com>"
 LABEL description="LLM GPU Throughput Calculator - zero-dependency static server"
 
 # Create non-root user
