@@ -68,6 +68,23 @@
     letter-spacing: 0.08em;
   }
 
+  .share-btn {
+    margin-left: auto;
+    padding: 0.3rem 0.9rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    background: transparent;
+    border: 1px solid var(--border2);
+    color: var(--text-dim);
+    cursor: pointer;
+    border-radius: 4px;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .share-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
   /* ── Layout ──────────────────────────────────────────── */
   .layout {
     display: grid;

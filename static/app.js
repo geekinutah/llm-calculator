@@ -255,6 +255,7 @@ function recalculate() {
   const throughput = calcThroughput(model, gpu, prec, N, batch.batch);
 
   renderResults(model, gpu, prec, N, batch, vram, throughput);
+  serializeState();
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -586,6 +587,87 @@ function drawGauge(pct) {
 }
 
 // ═══════════════════════════════════════════════════════════
+//  URL STATE — serialize / deserialize
+// ═══════════════════════════════════════════════════════════
+function serializeState() {
+  if (typeof document === 'undefined') return;
+  const p = new URLSearchParams();
+  const gpuVal = document.getElementById('gpuSelect').value;
+
+  if (gpuVal) p.set('g', gpuVal);
+  if (state.gpuCount !== 1) p.set('n', state.gpuCount);
+  if (state.precision !== 'bf16') p.set('p', state.precision);
+
+  const cost = document.getElementById('gpuCostPerHr').value;
+  if (cost) p.set('cost', cost);
+
+  const fields = [
+    ['mp', 'mParams'], ['ml', 'mLayers'], ['mh', 'mHidden'], ['mf', 'mFFN'],
+    ['ma', 'mHeads'], ['mk', 'mKVHeads'], ['mc', 'mContext'], ['mv', 'mVocab'],
+    ['map', 'mActiveParams'], ['bb', 'bBatch'], ['bs', 'bOutput'],
+  ];
+  for (const [key, id] of fields) {
+    const v = document.getElementById(id).value;
+    if (v) p.set(key, v);
+  }
+
+  const hf = document.getElementById('hfModelId').value.trim();
+  if (hf) p.set('hf', hf);
+
+  const qs = p.toString();
+  history.replaceState(null, '', qs ? '?' + qs : location.pathname);
+}
+
+function deserializeState() {
+  const p = new URLSearchParams(location.search);
+  if (!p.size) return;
+
+  const gpuVal = p.get('g');
+  if (gpuVal) document.getElementById('gpuSelect').value = gpuVal;
+
+  const n = parseInt(p.get('n'));
+  if (n >= 1 && n <= 16) {
+    state.gpuCount = n;
+    document.getElementById('gpuCountVal').textContent = n;
+  }
+
+  // Set precision on state before onGpuChange so pill fallback logic has context
+  const prec = p.get('p');
+  if (prec) state.precision = prec;
+
+  const cost = p.get('cost');
+  if (cost) document.getElementById('gpuCostPerHr').value = cost;
+
+  const fields = [
+    ['mp', 'mParams'], ['ml', 'mLayers'], ['mh', 'mHidden'], ['mf', 'mFFN'],
+    ['ma', 'mHeads'], ['mk', 'mKVHeads'], ['mc', 'mContext'], ['mv', 'mVocab'],
+    ['map', 'mActiveParams'], ['bb', 'bBatch'], ['bs', 'bOutput'],
+  ];
+  for (const [key, id] of fields) {
+    const v = p.get(key);
+    if (v) document.getElementById(id).value = v;
+  }
+
+  const hf = p.get('hf');
+  if (hf) document.getElementById('hfModelId').value = hf;
+
+  // onGpuChange wires up state.gpu, precision pills, pcie warning, and calls recalculate()
+  onGpuChange();
+
+  // Re-apply precision after onGpuChange (it may have fallen back to a supported default)
+  if (prec) setPrecision(prec);
+}
+
+function copyShareLink() {
+  navigator.clipboard.writeText(location.href).then(() => {
+    const btn = document.getElementById('shareBtn');
+    const prev = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = prev; }, 1500);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════
 //  GPU DROPDOWN RENDERER
 // ═══════════════════════════════════════════════════════════
 function renderGpuDropdown() {
@@ -645,6 +727,8 @@ function mkEl(tag, cls) {
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => {
   // Populate GPU dropdown from GPU_DB
   renderGpuDropdown();
+  // Restore state from URL query string (if any)
+  deserializeState();
 
   // Wire up input events for custom gpu fields
   ['cVram', 'cBw', 'cBf16', 'cFp8', 'cFp4', 'cInt8'].forEach(id => {
