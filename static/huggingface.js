@@ -60,7 +60,7 @@
   async function fetchSuggestions(query) {
     lastQuery = query;
     try {
-      const url = `${HF_API}?search=${encodeURIComponent(query)}&limit=${MAX_RESULTS}&sort=downloads&direction=-1&filter=text-generation`;
+      const url = `${HF_API}?search=${encodeURIComponent(query)}&limit=${MAX_RESULTS}&sort=downloads&direction=-1`;
       const res = await fetch(url);
       if (!res.ok) return;
       const models = await res.json();

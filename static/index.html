@@ -1,199 +1,237 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LLM Throughput Calculator</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LLM Throughput Calculator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
 
-<header>
-  <div class="logo">LLM<span>/</span>GPU <span>·</span> Throughput Calculator</div>
-  <div class="header-tag">MAX BATCHED THROUGHPUT · ROOFLINE MODEL</div>
-</header>
+  <header>
+    <div class="logo">LLM<span>/</span>GPU <span>·</span> Throughput Calculator</div>
+    <div style="display:flex; align-items:center; gap: 1rem;">
+      <div class="header-tag">MAX BATCHED THROUGHPUT · ROOFLINE MODEL</div>
+      <button class="settings-btn" onclick="toggleSettings(true)">⚙️ Settings</button>
+    </div>
+  </header>
 
-<div class="layout">
+  <div class="layout">
 
-  <!-- ── LEFT: INPUTS ── -->
-  <aside class="panel-inputs">
+    <!-- ── LEFT: INPUTS ── -->
+    <aside class="panel-inputs">
 
-    <!-- GPU Section -->
-    <div>
-      <div class="section-label">GPU Configuration</div>
+      <!-- GPU Section -->
+      <div>
+        <div class="section-label">GPU Configuration</div>
 
-      <div class="input-group" style="margin-bottom:0.75rem">
-        <label>GPU Model</label>
-        <select id="gpuSelect" onchange="onGpuChange()">
-          <option value="">— select GPU —</option>
-          <option value="custom">Custom GPU…</option>
-        </select>
+        <div class="input-group" style="margin-bottom:0.75rem">
+          <label>GPU Model</label>
+          <select id="gpuSelect" onchange="onGpuChange()">
+            <option value="">— select GPU —</option>
+            <option value="custom">Custom GPU…</option>
+          </select>
+        </div>
+
+        <div class="custom-gpu-fields" id="customGpuFields">
+          <div class="params-grid">
+            <div class="input-group">
+              <label>VRAM (GB)</label>
+              <input type="number" id="cVram" placeholder="80" min="1" oninput="recalculate()">
+            </div>
+            <div class="input-group">
+              <label>Mem BW (GB/s)</label>
+              <input type="number" id="cBw" placeholder="3350" min="1" oninput="recalculate()">
+            </div>
+            <div class="input-group">
+              <label>BF16 TFLOPS</label>
+              <input type="number" id="cBf16" placeholder="989" min="1" oninput="recalculate()">
+            </div>
+            <div class="input-group">
+              <label>FP8 TFLOPS</label>
+              <input type="number" id="cFp8" placeholder="1979" min="0" oninput="recalculate()">
+            </div>
+            <div class="input-group">
+              <label>FP4 TFLOPS</label>
+              <input type="number" id="cFp4" placeholder="0" min="0" oninput="recalculate()">
+            </div>
+            <div class="input-group">
+              <label>INT8 TOPS</label>
+              <input type="number" id="cInt8" placeholder="0" min="0" oninput="recalculate()">
+            </div>
+          </div>
+        </div>
+
+        <div class="disclaimer" id="b200Disclaimer" style="margin-top:0.6rem">
+          ★ B200 TFLOPS figures are estimates from NVIDIA GTC 2024 keynote. Independent MLPerf benchmarks pending.
+        </div>
+        <div class="disclaimer" id="pcieDisclaimer" style="margin-top:0.6rem">
+          ⚠ A100 PCIe has no NVLink. Multi-GPU tensor parallelism uses PCIe Gen4 x16 (~64 GB/s) — expect significant TP
+          overhead vs NVLink (600 GB/s). Single-GPU inference is unaffected.
+        </div>
+
+        <div class="input-group" style="margin-top:0.75rem">
+          <label>GPU Cost ($/hr)<i class="tip"
+              data-tip="Cloud rental cost per GPU per hour. Used to compute cost per million tokens at Balanced throughput (batch=32).&#10;&#10;Typical rates:&#10;· H100 SXM: $2.50–3.50/hr&#10;· H200 SXM: $3.50–5.00/hr&#10;· A100 SXM: $1.50–2.50/hr&#10;&#10;For multi-GPU deployments, total cost = this × GPU count."></i></label>
+          <input type="number" id="gpuCostPerHr" placeholder="2.50" min="0" step="0.10" oninput="recalculate()">
+        </div>
+
+        <div class="input-group" style="margin-top:0.75rem">
+          <label>GPU Count (Tensor Parallel)</label>
+          <div class="stepper">
+            <button onclick="stepGpu(-1)">−</button>
+            <div class="val" id="gpuCountVal">1</div>
+            <button onclick="stepGpu(1)">+</button>
+          </div>
+        </div>
       </div>
 
-      <div class="custom-gpu-fields" id="customGpuFields">
+      <!-- Model Section -->
+      <div>
+        <div class="section-label">Model</div>
+
+        <div class="input-group" style="margin-bottom:0.5rem">
+          <label>HuggingFace Model ID</label>
+          <div class="model-row">
+            <input type="text" id="hfModelId" placeholder="meta-llama/Llama-3.1-8B"
+              onkeydown="if(event.key==='Enter') fetchHFConfig()">
+            <button class="btn-fetch" id="fetchBtn" onclick="fetchHFConfig()">Fetch</button>
+          </div>
+          <div class="fetch-status" id="fetchStatus"></div>
+        </div>
+
         <div class="params-grid">
           <div class="input-group">
-            <label>VRAM (GB)</label>
-            <input type="number" id="cVram" placeholder="80" min="1" oninput="recalculate()">
+            <label>Params (B)<i class="tip"
+                data-tip="Total parameter count in billions.&#10;&#10;Weight VRAM = params × 1B × bytes/param.&#10;FLOPs per decode token ≈ 2 × params — every weight is read once per generated token.&#10;&#10;Auto-filled by Fetch; can be overridden manually."></i></label>
+            <input type="number" id="mParams" placeholder="7" min="0.1" step="0.1" oninput="recalculate()">
           </div>
           <div class="input-group">
-            <label>Mem BW (GB/s)</label>
-            <input type="number" id="cBw" placeholder="3350" min="1" oninput="recalculate()">
+            <label>Layers<i class="tip"
+                data-tip="Number of stacked transformer blocks.&#10;&#10;KV cache scales linearly with layer count — each layer stores its own K and V tensors for every cached token.&#10;&#10;Formula: KV = 2 × layers × kv_heads × head_dim × seq_len × batch × bytes"></i></label>
+            <input type="number" id="mLayers" placeholder="32" min="1" oninput="recalculate()">
           </div>
           <div class="input-group">
-            <label>BF16 TFLOPS</label>
-            <input type="number" id="cBf16" placeholder="989" min="1" oninput="recalculate()">
+            <label>Hidden Dim<i class="tip"
+                data-tip="Width of the model's residual stream (H).&#10;&#10;Attention FLOPs scale as O(H²) per layer. Sets KV head dimension: head_dim = H ÷ attn_heads.&#10;&#10;Also called d_model or embedding dimension."></i></label>
+            <input type="number" id="mHidden" placeholder="4096" min="64" oninput="recalculate()">
           </div>
           <div class="input-group">
-            <label>FP8 TFLOPS</label>
-            <input type="number" id="cFp8" placeholder="1979" min="0" oninput="recalculate()">
+            <label>FFN Dim<i class="tip"
+                data-tip="Intermediate size of the feed-forward sublayer.&#10;&#10;With SwiGLU (3 weight matrices), each layer contributes 3 × hidden × FFN params — the dominant cost in dense models.&#10;&#10;Typically 2.7–4× hidden size. Not used for MoE models."></i></label>
+            <input type="number" id="mFFN" placeholder="11008" min="64" oninput="recalculate()">
           </div>
           <div class="input-group">
-            <label>FP4 TFLOPS</label>
-            <input type="number" id="cFp4" placeholder="0" min="0" oninput="recalculate()">
+            <label>Attn Heads<i class="tip"
+                data-tip="Number of query attention heads.&#10;&#10;Derives head_dim = hidden ÷ heads. Each head independently computes attention scores over the full cached sequence.&#10;&#10;Does not affect KV cache size directly — that is driven by KV Heads."></i></label>
+            <input type="number" id="mHeads" placeholder="32" min="1" oninput="recalculate()">
           </div>
           <div class="input-group">
-            <label>INT8 TOPS</label>
-            <input type="number" id="cInt8" placeholder="0" min="0" oninput="recalculate()">
+            <label>KV Heads<i class="tip"
+                data-tip="Key/Value head count (Grouped Query Attention).&#10;&#10;Fewer KV heads than query heads reduces KV cache size proportionally. At 1 KV head (MQA), cache shrinks by 64× vs MHA.&#10;&#10;Set equal to Attn Heads for standard multi-head attention (MHA)."></i></label>
+            <input type="number" id="mKVHeads" placeholder="32" min="1" oninput="recalculate()">
+          </div>
+          <div class="input-group">
+            <label>Context Len<i class="tip"
+                data-tip="Maximum sequence length the model supports.&#10;&#10;This is a hard architectural limit, not a runtime cost. Actual KV cache usage is determined by the sequence length in Batch Configuration, not this value."></i></label>
+            <input type="number" id="mContext" placeholder="4096" min="128" oninput="recalculate()">
+          </div>
+          <div class="input-group">
+            <label>Vocab Size<i class="tip"
+                data-tip="Number of tokens in the vocabulary.&#10;&#10;Drives the embedding table: 2 × vocab × hidden × bytes (input embedding + output projection, when weights are not tied).&#10;&#10;Usually a minor contributor to total VRAM for large models."></i></label>
+            <input type="number" id="mVocab" placeholder="32000" min="1000" oninput="recalculate()">
+          </div>
+          <div class="input-group" style="grid-column:1/-1">
+            <label>Active Params (B)<i class="tip"
+                data-tip="MoE only: parameters actually computed per token.&#10;&#10;In dense models, Active = Total. In MoE models (e.g. Qwen3-235B-A22B, DeepSeek-V3), only a subset of experts fire per token — Active Params drives memory bandwidth and FLOPs per token, while Total Params drives VRAM.&#10;&#10;Auto-filled by Fetch for MoE models. Leave blank for dense models."></i></label>
+            <input type="number" id="mActiveParams" placeholder="leave blank for dense" min="0.1" step="0.1"
+              oninput="recalculate()">
           </div>
         </div>
       </div>
 
-      <div class="disclaimer" id="b200Disclaimer" style="margin-top:0.6rem">
-        ★ B200 TFLOPS figures are estimates from NVIDIA GTC 2024 keynote. Independent MLPerf benchmarks pending.
-      </div>
-      <div class="disclaimer" id="pcieDisclaimer" style="margin-top:0.6rem">
-        ⚠ A100 PCIe has no NVLink. Multi-GPU tensor parallelism uses PCIe Gen4 x16 (~64 GB/s) — expect significant TP overhead vs NVLink (600 GB/s). Single-GPU inference is unaffected.
-      </div>
-
-      <div class="input-group" style="margin-top:0.75rem">
-        <label>GPU Cost ($/hr)<i class="tip" data-tip="Cloud rental cost per GPU per hour. Used to compute cost per million tokens at Balanced throughput (batch=32).&#10;&#10;Typical rates:&#10;· H100 SXM: $2.50–3.50/hr&#10;· H200 SXM: $3.50–5.00/hr&#10;· A100 SXM: $1.50–2.50/hr&#10;&#10;For multi-GPU deployments, total cost = this × GPU count."></i></label>
-        <input type="number" id="gpuCostPerHr" placeholder="2.50" min="0" step="0.10" oninput="recalculate()">
-      </div>
-
-      <div class="input-group" style="margin-top:0.75rem">
-        <label>GPU Count (Tensor Parallel)</label>
-        <div class="stepper">
-          <button onclick="stepGpu(-1)">−</button>
-          <div class="val" id="gpuCountVal">1</div>
-          <button onclick="stepGpu(1)">+</button>
+      <!-- Precision Section -->
+      <div>
+        <div class="section-label">Precision</div>
+        <div class="input-group">
+          <label>Weight / Compute Dtype</label>
+          <div class="precision-group" id="precisionGroup">
+            <div class="pill" data-prec="fp32" onclick="setPrecision('fp32')">FP32</div>
+            <div class="pill active" data-prec="bf16" onclick="setPrecision('bf16')">BF16</div>
+            <div class="pill" data-prec="fp16" onclick="setPrecision('fp16')">FP16</div>
+            <div class="pill" data-prec="fp8" onclick="setPrecision('fp8')">FP8</div>
+            <div class="pill" data-prec="int8" onclick="setPrecision('int8')">INT8</div>
+            <div class="pill" data-prec="int4" onclick="setPrecision('int4')">INT4</div>
+            <div class="pill" data-prec="fp4" onclick="setPrecision('fp4')">FP4</div>
+          </div>
+          <div class="fetch-status" id="precNote" style="margin-top:0.4rem"></div>
         </div>
       </div>
-    </div>
 
-    <!-- Model Section -->
-    <div>
-      <div class="section-label">Model</div>
-
-      <div class="input-group" style="margin-bottom:0.5rem">
-        <label>HuggingFace Model ID</label>
-        <div class="model-row">
-          <input type="text" id="hfModelId" placeholder="meta-llama/Llama-3.1-8B"
-                 onkeydown="if(event.key==='Enter') fetchHFConfig()">
-          <button class="btn-fetch" id="fetchBtn" onclick="fetchHFConfig()">Fetch</button>
+      <!-- Batch config -->
+      <div>
+        <div class="section-label">Batch Configuration</div>
+        <div class="params-grid">
+          <div class="input-group">
+            <label>Batch Size<i class="tip"
+                data-tip="Concurrent sequences processed together.&#10;&#10;Scales KV cache and activation memory linearly. Larger batches increase arithmetic intensity — pushing the workload toward the compute-bound side of the roofline curve.&#10;&#10;Arithmetic intensity = 2 × batch × params ÷ model_bytes"></i></label>
+            <input type="number" id="bBatch" placeholder="32" min="1" oninput="recalculate()">
+          </div>
+          <div class="input-group">
+            <label>Seq Length<i class="tip"
+                data-tip="Tokens held in KV cache per request (prompt + output).&#10;&#10;This is the primary driver of KV cache size:&#10;KV = 2 × layers × kv_heads × head_dim × this × batch × bytes&#10;&#10;Set to your typical prompt+response length. For long-context models, this is the knob to tune batch feasibility."></i></label>
+            <input type="number" id="bOutput" placeholder="256" min="1" oninput="recalculate()">
+          </div>
         </div>
-        <div class="fetch-status" id="fetchStatus"></div>
       </div>
 
-      <div class="params-grid">
-        <div class="input-group">
-          <label>Params (B)<i class="tip" data-tip="Total parameter count in billions.&#10;&#10;Weight VRAM = params × 1B × bytes/param.&#10;FLOPs per decode token ≈ 2 × params — every weight is read once per generated token.&#10;&#10;Auto-filled by Fetch; can be overridden manually."></i></label>
-          <input type="number" id="mParams" placeholder="7" min="0.1" step="0.1" oninput="recalculate()">
+      <!-- Throughput Scenarios -->
+      <div>
+        <div class="section-label">Throughput Scenarios</div>
+        <div id="scenariosPanel" class="scenarios-empty">— configure GPU &amp; model —</div>
+      </div>
+
+    </aside>
+
+    <!-- ── RIGHT: OUTPUT ── -->
+    <main class="panel-output" id="outputPanel">
+      <div class="empty-state" id="emptyState">
+        <div class="empty-icon">⚡</div>
+        <div class="empty-text">
+          Select a GPU and enter model parameters<br>
+          to compute throughput estimates.
         </div>
+      </div>
+    </main>
+
+  </div>
+
+  <!-- Settings Modal -->
+  <div class="modal-overlay" id="settingsModal" onmousedown="if(event.target===this) toggleSettings(false)">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Settings</h3>
+        <button class="modal-close" onclick="toggleSettings(false)">×</button>
+      </div>
+      <div class="modal-body">
         <div class="input-group">
-          <label>Layers<i class="tip" data-tip="Number of stacked transformer blocks.&#10;&#10;KV cache scales linearly with layer count — each layer stores its own K and V tensors for every cached token.&#10;&#10;Formula: KV = 2 × layers × kv_heads × head_dim × seq_len × batch × bytes"></i></label>
-          <input type="number" id="mLayers" placeholder="32" min="1" oninput="recalculate()">
-        </div>
-        <div class="input-group">
-          <label>Hidden Dim<i class="tip" data-tip="Width of the model's residual stream (H).&#10;&#10;Attention FLOPs scale as O(H²) per layer. Sets KV head dimension: head_dim = H ÷ attn_heads.&#10;&#10;Also called d_model or embedding dimension."></i></label>
-          <input type="number" id="mHidden" placeholder="4096" min="64" oninput="recalculate()">
-        </div>
-        <div class="input-group">
-          <label>FFN Dim<i class="tip" data-tip="Intermediate size of the feed-forward sublayer.&#10;&#10;With SwiGLU (3 weight matrices), each layer contributes 3 × hidden × FFN params — the dominant cost in dense models.&#10;&#10;Typically 2.7–4× hidden size. Not used for MoE models."></i></label>
-          <input type="number" id="mFFN" placeholder="11008" min="64" oninput="recalculate()">
-        </div>
-        <div class="input-group">
-          <label>Attn Heads<i class="tip" data-tip="Number of query attention heads.&#10;&#10;Derives head_dim = hidden ÷ heads. Each head independently computes attention scores over the full cached sequence.&#10;&#10;Does not affect KV cache size directly — that is driven by KV Heads."></i></label>
-          <input type="number" id="mHeads" placeholder="32" min="1" oninput="recalculate()">
-        </div>
-        <div class="input-group">
-          <label>KV Heads<i class="tip" data-tip="Key/Value head count (Grouped Query Attention).&#10;&#10;Fewer KV heads than query heads reduces KV cache size proportionally. At 1 KV head (MQA), cache shrinks by 64× vs MHA.&#10;&#10;Set equal to Attn Heads for standard multi-head attention (MHA)."></i></label>
-          <input type="number" id="mKVHeads" placeholder="32" min="1" oninput="recalculate()">
-        </div>
-        <div class="input-group">
-          <label>Context Len<i class="tip" data-tip="Maximum sequence length the model supports.&#10;&#10;This is a hard architectural limit, not a runtime cost. Actual KV cache usage is determined by the sequence length in Batch Configuration, not this value."></i></label>
-          <input type="number" id="mContext" placeholder="4096" min="128" oninput="recalculate()">
-        </div>
-        <div class="input-group">
-          <label>Vocab Size<i class="tip" data-tip="Number of tokens in the vocabulary.&#10;&#10;Drives the embedding table: 2 × vocab × hidden × bytes (input embedding + output projection, when weights are not tied).&#10;&#10;Usually a minor contributor to total VRAM for large models."></i></label>
-          <input type="number" id="mVocab" placeholder="32000" min="1000" oninput="recalculate()">
-        </div>
-        <div class="input-group" style="grid-column:1/-1">
-          <label>Active Params (B)<i class="tip" data-tip="MoE only: parameters actually computed per token.&#10;&#10;In dense models, Active = Total. In MoE models (e.g. Qwen3-235B-A22B, DeepSeek-V3), only a subset of experts fire per token — Active Params drives memory bandwidth and FLOPs per token, while Total Params drives VRAM.&#10;&#10;Auto-filled by Fetch for MoE models. Leave blank for dense models."></i></label>
-          <input type="number" id="mActiveParams" placeholder="leave blank for dense" min="0.1" step="0.1" oninput="recalculate()">
+          <label>HF Token (for gated models)<i class="tip" data-tip="Required for models like Llama 3 or Gemma. Create a Read-only token in your HuggingFace account settings."></i></label>
+          <input type="password" id="hfToken" placeholder="hf_..." oninput="saveToken()">
         </div>
       </div>
     </div>
+  </div>
 
-    <!-- Precision Section -->
-    <div>
-      <div class="section-label">Precision</div>
-      <div class="input-group">
-        <label>Weight / Compute Dtype</label>
-        <div class="precision-group" id="precisionGroup">
-          <div class="pill" data-prec="fp32"  onclick="setPrecision('fp32')">FP32</div>
-          <div class="pill active" data-prec="bf16" onclick="setPrecision('bf16')">BF16</div>
-          <div class="pill" data-prec="fp16" onclick="setPrecision('fp16')">FP16</div>
-          <div class="pill" data-prec="fp8"  onclick="setPrecision('fp8')">FP8</div>
-          <div class="pill" data-prec="int8" onclick="setPrecision('int8')">INT8</div>
-          <div class="pill" data-prec="int4" onclick="setPrecision('int4')">INT4</div>
-          <div class="pill" data-prec="fp4"  onclick="setPrecision('fp4')">FP4</div>
-        </div>
-        <div class="fetch-status" id="precNote" style="margin-top:0.4rem"></div>
-      </div>
-    </div>
-
-    <!-- Batch config -->
-    <div>
-      <div class="section-label">Batch Configuration</div>
-      <div class="params-grid">
-        <div class="input-group">
-          <label>Batch Size<i class="tip" data-tip="Concurrent sequences processed together.&#10;&#10;Scales KV cache and activation memory linearly. Larger batches increase arithmetic intensity — pushing the workload toward the compute-bound side of the roofline curve.&#10;&#10;Arithmetic intensity = 2 × batch × params ÷ model_bytes"></i></label>
-          <input type="number" id="bBatch" placeholder="32" min="1" oninput="recalculate()">
-        </div>
-        <div class="input-group">
-          <label>Seq Length<i class="tip" data-tip="Tokens held in KV cache per request (prompt + output).&#10;&#10;This is the primary driver of KV cache size:&#10;KV = 2 × layers × kv_heads × head_dim × this × batch × bytes&#10;&#10;Set to your typical prompt+response length. For long-context models, this is the knob to tune batch feasibility."></i></label>
-          <input type="number" id="bOutput" placeholder="256" min="1" oninput="recalculate()">
-        </div>
-      </div>
-    </div>
-
-    <!-- Throughput Scenarios -->
-    <div>
-      <div class="section-label">Throughput Scenarios</div>
-      <div id="scenariosPanel" class="scenarios-empty">— configure GPU &amp; model —</div>
-    </div>
-
-  </aside>
-
-  <!-- ── RIGHT: OUTPUT ── -->
-  <main class="panel-output" id="outputPanel">
-    <div class="empty-state" id="emptyState">
-      <div class="empty-icon">⚡</div>
-      <div class="empty-text">
-        Select a GPU and enter model parameters<br>
-        to compute throughput estimates.
-      </div>
-    </div>
-  </main>
-
-</div>
-
-<script src="gpus.js"></script>
-<script src="app.js"></script>
-<script src="huggingface.js"></script>
+  <script src="gpus.js"></script>
+  <script src="app.js"></script>
+  <script src="huggingface.js"></script>
 </body>
+
 </html>

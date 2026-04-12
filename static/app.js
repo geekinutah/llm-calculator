@@ -36,7 +36,7 @@ let state = {
 function onGpuChange() {
   const v = document.getElementById('gpuSelect').value;
   const customFields = document.getElementById('customGpuFields');
-  const disclaimer   = document.getElementById('b200Disclaimer');
+  const disclaimer = document.getElementById('b200Disclaimer');
 
   if (v === 'custom') {
     customFields.classList.add('show');
@@ -58,15 +58,15 @@ function onGpuChange() {
 function buildCustomGpu() {
   return {
     name: 'Custom GPU',
-    vram:  +document.getElementById('cVram').value  || null,
-    bw:    +document.getElementById('cBw').value    || null,
-    bf16:  +document.getElementById('cBf16').value  || null,
-    fp16:  +document.getElementById('cBf16').value  || null,
-    fp32:  null,
-    fp8:   +document.getElementById('cFp8').value   || null,
-    fp4:   +document.getElementById('cFp4').value   || null,
-    int8:  +document.getElementById('cInt8').value  || null,
-    int4:  +document.getElementById('cInt8').value  || null,
+    vram: +document.getElementById('cVram').value || null,
+    bw: +document.getElementById('cBw').value || null,
+    bf16: +document.getElementById('cBf16').value || null,
+    fp16: +document.getElementById('cBf16').value || null,
+    fp32: null,
+    fp8: +document.getElementById('cFp8').value || null,
+    fp4: +document.getElementById('cFp4').value || null,
+    int8: +document.getElementById('cInt8').value || null,
+    int4: +document.getElementById('cInt8').value || null,
   };
 }
 
@@ -106,7 +106,7 @@ function updatePrecisionPills() {
 
   // If current precision became unsupported, fall back
   if (gpu && getTFLOPS(gpu, state.precision) === null) {
-    const fallback = ['bf16','fp16','int8','fp32'].find(p => getTFLOPS(gpu, p) !== null) || 'bf16';
+    const fallback = ['bf16', 'fp16', 'int8', 'fp32'].find(p => getTFLOPS(gpu, p) !== null) || 'bf16';
     setPrecision(fallback);
   }
 
@@ -122,8 +122,10 @@ function updatePrecisionPills() {
 
 function getTFLOPS(gpu, prec) {
   if (!gpu) return null;
-  const map = { fp32: gpu.fp32, bf16: gpu.bf16, fp16: gpu.fp16,
-                fp8: gpu.fp8, int8: gpu.int8, int4: gpu.int4, fp4: gpu.fp4 };
+  const map = {
+    fp32: gpu.fp32, bf16: gpu.bf16, fp16: gpu.fp16,
+    fp8: gpu.fp8, int8: gpu.int8, int4: gpu.int4, fp4: gpu.fp4
+  };
   return map[prec] ?? null;
 }
 
@@ -143,26 +145,34 @@ async function fetchHFConfig() {
 
   try {
     const url = `https://huggingface.co/${modelId}/resolve/main/config.json`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const cfg = await res.json();
+    const hfToken = document.getElementById('hfToken')?.value.trim();
+    const headers = hfToken ? { 'Authorization': `Bearer ${hfToken}` } : {};
+    const res = await fetch(url, { headers });
+    if (!res.ok) {
+      if (res.status === 401) throw new Error('HTTP 401 — Unauthorized. Add HF Token in Settings');
+      if (res.status === 403) throw new Error('403_FORBIDDEN');
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const rawCfg = await res.json();
+    const cfg = rawCfg.text_config || rawCfg.language_config || rawCfg;
+    if (rawCfg.safetensors) cfg.safetensors = rawCfg.safetensors;
 
     // Map common HF config keys → our fields
     const mappings = {
-      params:   inferParams(cfg),
-      layers:   cfg.num_hidden_layers ?? cfg.n_layer ?? cfg.num_layers ?? null,
-      hidden:   cfg.hidden_size ?? cfg.d_model ?? cfg.n_embd ?? null,
-      ffn:      cfg.intermediate_size ?? cfg.ffn_dim ?? cfg.inner_dim ?? null,
-      heads:    cfg.num_attention_heads ?? cfg.n_head ?? null,
-      kvHeads:  cfg.num_key_value_heads ?? cfg.num_attention_heads ?? cfg.n_head ?? null,
-      context:  cfg.max_position_embeddings ?? cfg.n_positions ?? cfg.max_seq_len ?? null,
-      vocab:    cfg.vocab_size ?? null,
+      params: inferParams(cfg),
+      layers: cfg.num_hidden_layers ?? cfg.n_layer ?? cfg.num_layers ?? null,
+      hidden: cfg.hidden_size ?? cfg.d_model ?? cfg.n_embd ?? null,
+      ffn: cfg.intermediate_size ?? cfg.ffn_dim ?? cfg.inner_dim ?? null,
+      heads: cfg.num_attention_heads ?? cfg.n_head ?? null,
+      kvHeads: cfg.num_key_value_heads ?? cfg.num_attention_heads ?? cfg.n_head ?? null,
+      context: cfg.max_position_embeddings ?? cfg.n_positions ?? cfg.max_seq_len ?? null,
+      vocab: cfg.vocab_size ?? null,
     };
 
     // Infer precision from torch_dtype
     const dtype = cfg.torch_dtype ?? cfg.dtype;
     if (dtype) {
-      const dtypeMap = { float32:'fp32', float16:'fp16', bfloat16:'bf16' };
+      const dtypeMap = { float32: 'fp32', float16: 'fp16', bfloat16: 'bf16' };
       const mapped = dtypeMap[dtype];
       if (mapped) {
         setPrecision(mapped);
@@ -170,14 +180,14 @@ async function fetchHFConfig() {
     }
 
     // Fill fields
-    setFieldVal('mParams',  mappings.params   ? (mappings.params / 1e9).toFixed(2) : '');
-    setFieldVal('mLayers',  mappings.layers);
-    setFieldVal('mHidden',  mappings.hidden);
-    setFieldVal('mFFN',     mappings.ffn);
-    setFieldVal('mHeads',   mappings.heads);
+    setFieldVal('mParams', mappings.params ? (mappings.params / 1e9).toFixed(2) : '');
+    setFieldVal('mLayers', mappings.layers);
+    setFieldVal('mHidden', mappings.hidden);
+    setFieldVal('mFFN', mappings.ffn);
+    setFieldVal('mHeads', mappings.heads);
     setFieldVal('mKVHeads', mappings.kvHeads);
     setFieldVal('mContext', mappings.context);
-    setFieldVal('mVocab',   mappings.vocab);
+    setFieldVal('mVocab', mappings.vocab);
 
     // Active params — only fill for MoE models
     const activeP = inferActiveParams(cfg);
@@ -191,9 +201,15 @@ async function fetchHFConfig() {
     statusEl.textContent = `✓ Loaded ${cfg.model_type ?? modelId}`;
 
     recalculate();
-  } catch(e) {
+  } catch (e) {
     statusEl.className = 'fetch-status err';
-    statusEl.textContent = `✗ ${e.message} — check model ID`;
+    if (e.message === '403_FORBIDDEN') {
+      // safe html injection using text interpolation where needed
+      const safeId = modelId.replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      statusEl.innerHTML = `✗ HTTP 403 — Forbidden. <a href="https://huggingface.co/${safeId}" target="_blank" style="color:inherit;text-decoration:underline;text-underline-offset:2px;">Accept the license here</a>`;
+    } else {
+      statusEl.textContent = e.message.includes('401') ? `✗ ${e.message}` : `✗ ${e.message} — check model ID`;
+    }
   } finally {
     fetchBtn.disabled = false;
   }
@@ -209,17 +225,17 @@ function inferParams(cfg) {
   if (!L || !H || !V) return null;
 
   const attn = 4 * H * H; // Q+K+V+O projections
-  const emb  = 2 * V * H; // embedding + lm_head
+  const emb = 2 * V * H; // embedding + lm_head
 
   // MoE architecture
   const nRouted = cfg.n_routed_experts ?? cfg.num_experts ?? 0;
-  const moeFFN  = cfg.moe_intermediate_size;
+  const moeFFN = cfg.moe_intermediate_size;
   if (moeFFN && nRouted > 0) {
-    const nShared   = cfg.n_shared_experts ?? 0;
-    const freq      = cfg.moe_layer_freq ?? 1;
+    const nShared = cfg.n_shared_experts ?? 0;
+    const freq = cfg.moe_layer_freq ?? 1;
     const moeLayers = Math.ceil(L / freq);
     const denseLayers = L - moeLayers;
-    const ffnPerMoeLayer   = (nRouted + nShared) * 3 * H * moeFFN;
+    const ffnPerMoeLayer = (nRouted + nShared) * 3 * H * moeFFN;
     const denseFFN = cfg.intermediate_size;
     const ffnPerDenseLayer = denseFFN ? 3 * H * denseFFN : 0;
     return emb + moeLayers * (attn + ffnPerMoeLayer) + denseLayers * (attn + ffnPerDenseLayer);
@@ -234,8 +250,8 @@ function inferParams(cfg) {
 // Active params for MoE: only the experts that fire per token contribute to
 // memory bandwidth and FLOPs. Returns null for dense models (active = total).
 function inferActiveParams(cfg) {
-  const nRouted    = cfg.n_routed_experts ?? cfg.num_experts ?? 0;
-  const moeFFN     = cfg.moe_intermediate_size;
+  const nRouted = cfg.n_routed_experts ?? cfg.num_experts ?? 0;
+  const moeFFN = cfg.moe_intermediate_size;
   const activePerTok = cfg.num_experts_per_tok ?? cfg.n_activated_experts ?? null;
   if (!moeFFN || !nRouted || activePerTok === null) return null;
 
@@ -244,11 +260,11 @@ function inferActiveParams(cfg) {
   const V = cfg.vocab_size;
   if (!L || !H || !V) return null;
 
-  const attn    = 4 * H * H;
-  const emb     = 2 * V * H;
+  const attn = 4 * H * H;
+  const emb = 2 * V * H;
   const nShared = cfg.n_shared_experts ?? 0;
-  const freq    = cfg.moe_layer_freq ?? 1;
-  const moeLayers   = Math.ceil(L / freq);
+  const freq = cfg.moe_layer_freq ?? 1;
+  const moeLayers = Math.ceil(L / freq);
   const denseLayers = L - moeLayers;
 
   const activeFFNPerMoeLayer = (activePerTok + nShared) * 3 * H * moeFFN;
@@ -262,6 +278,8 @@ function setFieldVal(id, val) {
   const el = document.getElementById(id);
   if (val != null && val !== '') {
     el.value = val;
+  } else {
+    el.value = '';
   }
 }
 
@@ -270,21 +288,21 @@ function setFieldVal(id, val) {
 // ═══════════════════════════════════════════════════════════
 function readModel() {
   return {
-    params:       +document.getElementById('mParams').value        || null,
-    activeParams: +document.getElementById('mActiveParams').value  || null,
-    layers:       +document.getElementById('mLayers').value        || null,
-    hidden:       +document.getElementById('mHidden').value        || null,
-    ffn:          +document.getElementById('mFFN').value           || null,
-    heads:        +document.getElementById('mHeads').value         || null,
-    kvHeads:      +document.getElementById('mKVHeads').value       || null,
-    context:      +document.getElementById('mContext').value       || null,
-    vocab:        +document.getElementById('mVocab').value         || null,
+    params: +document.getElementById('mParams').value || null,
+    activeParams: +document.getElementById('mActiveParams').value || null,
+    layers: +document.getElementById('mLayers').value || null,
+    hidden: +document.getElementById('mHidden').value || null,
+    ffn: +document.getElementById('mFFN').value || null,
+    heads: +document.getElementById('mHeads').value || null,
+    kvHeads: +document.getElementById('mKVHeads').value || null,
+    context: +document.getElementById('mContext').value || null,
+    vocab: +document.getElementById('mVocab').value || null,
   };
 }
 
 function readBatch() {
   return {
-    batch:  +document.getElementById('bBatch').value  || 32,
+    batch: +document.getElementById('bBatch').value || 32,
     output: +document.getElementById('bOutput').value || 2048,
   };
 }
@@ -330,8 +348,8 @@ function calcVRAM(model, gpu, precision, gpuCount, batch, seqLen) {
 function estimateParams(model) {
   if (!model.layers || !model.hidden || !model.ffn || !model.vocab) return null;
   const attn = 4 * model.hidden * model.hidden;
-  const ffn  = 3 * model.hidden * model.ffn;
-  const emb  = 2 * model.vocab * model.hidden;
+  const ffn = 3 * model.hidden * model.ffn;
+  const emb = 2 * model.vocab * model.hidden;
   return (emb + model.layers * (attn + ffn)) / 1e9;
 }
 
@@ -444,30 +462,30 @@ function renderScenarios(model, gpu, precision, gpuCount, seqLen) {
   }
 
   const maxBatch = calcMaxBatch(model, gpu, precision, gpuCount, seqLen);
-  const tpMax    = calcThroughput(model, gpu, precision, gpuCount, maxBatch);
-  const tpMid    = calcThroughput(model, gpu, precision, gpuCount, 32);
+  const tpMax = calcThroughput(model, gpu, precision, gpuCount, maxBatch);
+  const tpMid = calcThroughput(model, gpu, precision, gpuCount, 32);
 
   const rows = [
     {
       label: 'Min Latency',
-      sub:   'batch 1 · lowest response time',
-      tps:   tp.tps,
-      cls:   'best',
-      tip:   'Batch=1: one user, no queuing. The GPU streams all weights once per token — pure memory-bandwidth limit.\n\nFormula: BW × N_GPUs / model_bytes × MFU\n\nThis is the fastest a single user can receive tokens. Latency is minimized; GPU utilization is low.',
+      sub: 'batch 1 · lowest response time',
+      tps: tp.tps,
+      cls: 'best',
+      tip: 'Batch=1: one user, no queuing. The GPU streams all weights once per token — pure memory-bandwidth limit.\n\nFormula: BW × N_GPUs / model_bytes × MFU\n\nThis is the fastest a single user can receive tokens. Latency is minimized; GPU utilization is low.',
     },
     {
       label: 'Balanced',
-      sub:   'batch 32 · production baseline',
-      tps:   tpMid?.tps ?? 0,
-      cls:   '',
-      tip:   'Batch=32: a reasonable continuous-batching baseline for a production API.\n\nThroughput scales linearly with batch while memory-bound. Each user waits slightly longer, but the system serves 32× more tokens per second than batch=1.\n\nTypical starting point for vLLM / TRT-LLM deployments.',
+      sub: 'batch 32 · production baseline',
+      tps: tpMid?.tps ?? 0,
+      cls: '',
+      tip: 'Batch=32: a reasonable continuous-batching baseline for a production API.\n\nThroughput scales linearly with batch while memory-bound. Each user waits slightly longer, but the system serves 32× more tokens per second than batch=1.\n\nTypical starting point for vLLM / TRT-LLM deployments.',
     },
     {
       label: 'Max Throughput',
-      sub:   `batch ${maxBatch} · VRAM ceiling`,
-      tps:   tpMax?.tps ?? 0,
-      cls:   'worst',
-      tip:   `Batch=${maxBatch}: the largest batch that fits in VRAM given your seq length.\n\nFree VRAM after weights is divided by (KV cache + activations) per request at the configured seq length.\n\nHighest total tokens/sec for the system, but each user's response latency is highest. Beyond this batch size the model OOMs.`,
+      sub: `batch ${maxBatch} · VRAM ceiling`,
+      tps: tpMax?.tps ?? 0,
+      cls: 'worst',
+      tip: `Batch=${maxBatch}: the largest batch that fits in VRAM given your seq length.\n\nFree VRAM after weights is divided by (KV cache + activations) per request at the configured seq length.\n\nHighest total tokens/sec for the system, but each user's response latency is highest. Beyond this batch size the model OOMs.`,
     },
   ];
 
@@ -491,11 +509,11 @@ function recalculate() {
 
   const model = readModel();
   const batch = readBatch();
-  const gpu   = state.gpu;
-  const prec  = state.precision;
-  const N     = state.gpuCount;
+  const gpu = state.gpu;
+  const prec = state.precision;
+  const N = state.gpuCount;
 
-  const hasGPU   = !!gpu;
+  const hasGPU = !!gpu;
   const hasModel = !!(model.params || (model.layers && model.hidden && model.ffn));
 
   renderScenarios(model, gpu, prec, N, batch.output);
@@ -508,7 +526,7 @@ function recalculate() {
 
   document.getElementById('emptyState').style.display = 'none';
 
-  const vram    = calcVRAM(model, gpu, prec, N, batch.batch, batch.output);
+  const vram = calcVRAM(model, gpu, prec, N, batch.batch, batch.output);
   const throughput = calcThroughput(model, gpu, prec, N, batch.batch);
 
   renderResults(model, gpu, prec, N, batch, vram, throughput);
@@ -526,7 +544,7 @@ function renderResults(model, gpu, prec, N, batch, vram, tp) {
   // ── Hero metrics ──
   const heroEl = mkEl('div', 'results-block');
   const tpsVal = tp ? tp.tps.toLocaleString() : '—';
-  const tpsSub = tp ? `${PREC_META[prec].label} · batch ${batch.batch} · ${N > 1 ? N+'× GPU TP' : '1 GPU'}` : '';
+  const tpsSub = tp ? `${PREC_META[prec].label} · batch ${batch.batch} · ${N > 1 ? N + '× GPU TP' : '1 GPU'}` : '';
   const utilVal = tp ? tp.flopsUtil.toFixed(1) + '%' : '—';
   const modelGB = vram.weightsGB ? vram.weightsGB.toFixed(1) : '—';
 
@@ -571,10 +589,10 @@ function renderResults(model, gpu, prec, N, batch, vram, tp) {
   // ── Bottleneck badge ──
   if (tp) {
     const badgeEl = mkEl('div', 'results-block bottleneck-row');
-    const cls  = tp.isComputeBound ? 'compute' : 'memory';
+    const cls = tp.isComputeBound ? 'compute' : 'memory';
     const icon = tp.isComputeBound ? '⚡' : '💾';
     const label = tp.isComputeBound ? 'Compute-Bound' : 'Memory-Bound';
-    const desc  = tp.isComputeBound
+    const desc = tp.isComputeBound
       ? `Arithmetic intensity (${tp.arithIntensity.toFixed(0)} ops/B) exceeds ridge point (${tp.ridgePoint.toFixed(0)} ops/B). TFLOPS is the limiting factor.`
       : `Arithmetic intensity (${tp.arithIntensity.toFixed(0)} ops/B) is below ridge point (${tp.ridgePoint.toFixed(0)} ops/B). Memory bandwidth is the limiting factor.`;
     badgeEl.innerHTML = `
@@ -609,7 +627,7 @@ function renderResults(model, gpu, prec, N, batch, vram, tp) {
         </div>
         <div class="gauge-legend-row">
           <span class="gauge-legend-label">MFU Applied</span>
-          <span class="gauge-legend-val">${tp ? (tp.mfu*100).toFixed(0) : '—'}%</span>
+          <span class="gauge-legend-val">${tp ? (tp.mfu * 100).toFixed(0) : '—'}%</span>
         </div>
         <div class="gauge-legend-divider"></div>
         <div class="gauge-legend-row">
@@ -659,10 +677,10 @@ function renderResults(model, gpu, prec, N, batch, vram, tp) {
 function buildVRAMHTML(v) {
   const total = v.totalVram;
   const segs = [
-    { key: 'weights',     gb: v.weightsGB,   label: 'Weights',     cls: 'vram-seg-weights'     },
-    { key: 'kv',          gb: v.kvGB,        label: 'KV Cache',    cls: 'vram-seg-kv'           },
-    { key: 'activations', gb: v.actGB,       label: 'Activations', cls: 'vram-seg-activations'  },
-    { key: 'cuda',        gb: v.cudaGB,      label: 'CUDA/FW',     cls: 'vram-seg-cuda'         },
+    { key: 'weights', gb: v.weightsGB, label: 'Weights', cls: 'vram-seg-weights' },
+    { key: 'kv', gb: v.kvGB, label: 'KV Cache', cls: 'vram-seg-kv' },
+    { key: 'activations', gb: v.actGB, label: 'Activations', cls: 'vram-seg-activations' },
+    { key: 'cuda', gb: v.cudaGB, label: 'CUDA/FW', cls: 'vram-seg-cuda' },
   ].filter(s => s.gb && s.gb > 0);
 
   const segHTML = segs.map(s => {
@@ -673,18 +691,18 @@ function buildVRAMHTML(v) {
   const overflowPct = v.overflow > 0 ? Math.min(100, (v.overflow / total) * 100) : 0;
 
   // Legend entries
-  const dotColors = ['var(--c-weights)','var(--c-kvcache)','var(--c-activations)','var(--c-cuda)','var(--c-free)'];
+  const dotColors = ['var(--c-weights)', 'var(--c-kvcache)', 'var(--c-activations)', 'var(--c-cuda)', 'var(--c-free)'];
   const legItems = [
-    ...segs.map((s,i) => ({ label: s.label, gb: s.gb, color: dotColors[i] })),
+    ...segs.map((s, i) => ({ label: s.label, gb: s.gb, color: dotColors[i] })),
     { label: 'Free', gb: v.freeGB > 0 ? v.freeGB : 0, color: 'var(--c-free)', border: '1px solid var(--border2)' },
   ];
 
   const legHTML = legItems.map(l => `
     <div class="vleg">
-      <div class="vleg-dot" style="background:${l.color};${l.border ? 'border:'+l.border : ''}"></div>
+      <div class="vleg-dot" style="background:${l.color};${l.border ? 'border:' + l.border : ''}"></div>
       <div class="vleg-name">${l.label}</div>
       <div class="vleg-val">${l.gb.toFixed(1)} GB</div>
-      <div class="vleg-pct">${((l.gb/v.totalVram)*100).toFixed(1)}%</div>
+      <div class="vleg-pct">${((l.gb / v.totalVram) * 100).toFixed(1)}%</div>
     </div>
   `).join('');
 
@@ -705,15 +723,15 @@ function buildBreakdownHTML(tp, model) {
   const isMoE = model.activeParams && model.params && model.activeParams < model.params;
   const rows = [
     ...(isMoE ? [
-      ['Total Params',     model.params.toFixed(2)+' B'],
-      ['Active Params',    model.activeParams.toFixed(2)+' B  ← MoE: drives BW & FLOPs'],
+      ['Total Params', model.params.toFixed(2) + ' B'],
+      ['Active Params', model.activeParams.toFixed(2) + ' B  ← MoE: drives BW & FLOPs'],
     ] : []),
-    ['Mem Bandwidth',    (tp.bwGBs/1000).toFixed(2)+' TB/s'],
-    ['Ridge Point',      tp.ridgePoint.toFixed(0)+' ops/byte'],
-    ['Arith. Intensity', tp.arithIntensity.toFixed(0)+' ops/byte'],
+    ['Mem Bandwidth', (tp.bwGBs / 1000).toFixed(2) + ' TB/s'],
+    ['Ridge Point', tp.ridgePoint.toFixed(0) + ' ops/byte'],
+    ['Arith. Intensity', tp.arithIntensity.toFixed(0) + ' ops/byte'],
   ];
 
-  const rowsHTML = rows.map(([l,v]) => `
+  const rowsHTML = rows.map(([l, v]) => `
     <div class="brow">
       <span class="brow-label">${l}</span>
       <span class="brow-val">${v}</span>
@@ -755,8 +773,8 @@ function drawGauge(pct) {
   const cx = W / 2, cy = H - 18;
   const r = 88;
   const startAngle = Math.PI;
-  const endAngle   = 2 * Math.PI;
-  const fraction   = Math.min(100, Math.max(0, pct)) / 100;
+  const endAngle = 2 * Math.PI;
+  const fraction = Math.min(100, Math.max(0, pct)) / 100;
 
   ctx.clearRect(0, 0, W, H);
 
@@ -802,9 +820,9 @@ function drawGauge(pct) {
   if (fraction > 0) {
     const valAngle = startAngle + fraction * Math.PI;
     const grad = ctx.createLinearGradient(cx - r, cy, cx + r, cy);
-    grad.addColorStop(0,   '#00e676');
+    grad.addColorStop(0, '#00e676');
     grad.addColorStop(0.5, '#ffd740');
-    grad.addColorStop(1,   '#ff5252');
+    grad.addColorStop(1, '#ff5252');
 
     ctx.beginPath();
     ctx.arc(cx, cy, r, startAngle, valAngle);
@@ -819,8 +837,8 @@ function drawGauge(pct) {
     const a = startAngle + t * Math.PI;
     const ix = cx + (r - 17) * Math.cos(a);
     const iy = cy + (r - 17) * Math.sin(a);
-    const ox = cx + (r - 5)  * Math.cos(a);
-    const oy = cy + (r - 5)  * Math.sin(a);
+    const ox = cx + (r - 5) * Math.cos(a);
+    const oy = cy + (r - 5) * Math.sin(a);
     ctx.beginPath();
     ctx.moveTo(ix, iy);
     ctx.lineTo(ox, oy);
@@ -907,7 +925,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   renderGpuDropdown();
 
   // Wire up input events for custom gpu fields
-  ['cVram','cBw','cBf16','cFp8','cFp4','cInt8'].forEach(id => {
+  ['cVram', 'cBw', 'cBf16', 'cFp8', 'cFp4', 'cInt8'].forEach(id => {
     document.getElementById(id).addEventListener('input', () => {
       if (document.getElementById('gpuSelect').value === 'custom') {
         state.gpu = buildCustomGpu();
@@ -940,7 +958,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     if (top < 8) top = r.bottom + GAP;
 
     tipFloat.style.left = left + 'px';
-    tipFloat.style.top  = top  + 'px';
+    tipFloat.style.top = top + 'px';
   }
 
   document.body.addEventListener('mouseover', e => {
@@ -950,4 +968,21 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   document.body.addEventListener('mouseout', e => {
     if (e.target.closest('.tip')) tipFloat.style.display = 'none';
   });
+
+  // Init token on load
+  const savedToken = localStorage.getItem('hfToken');
+  if (savedToken) {
+    const tEl = document.getElementById('hfToken');
+    if (tEl) tEl.value = savedToken;
+  }
 });
+
+function toggleSettings(show) {
+  const m = document.getElementById('settingsModal');
+  if (m) m.classList.toggle('show', show);
+}
+
+function saveToken() {
+  const t = document.getElementById('hfToken').value.trim();
+  localStorage.setItem('hfToken', t);
+}
