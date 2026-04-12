@@ -798,3 +798,15 @@
   .modal-close { background: none; border: none; color: var(--text-dim); font-size: 1.5rem; line-height: 1; cursor: pointer; transition: color 0.15s; }
   .modal-close:hover { color: var(--text); }
   .modal-body { padding-top: 0.5rem; padding-bottom: 0.5rem; }
+
+  /* ── Error Form States ────────────────────────────────────── */
+  input.error-field {
+    border-color: #ff3333 !important;
+    background: rgba(255, 51, 51, 0.08) !important;
+    box-shadow: 0 0 10px rgba(255, 51, 51, 0.3) !important;
+    color: #ff3333 !important;
+  }
+  input.error-field::placeholder {
+    color: #ff3333 !important;
+    opacity: 0.8 !important;
+  }

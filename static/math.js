@@ -1,0 +1,216 @@
+// ═══════════════════════════════════════════════════════════
+//  MATH ENGINE
+// ═══════════════════════════════════════════════════════════
+
+function getTFLOPS(gpu, prec) {
+  if (!gpu) return null;
+  const map = {
+    fp32: gpu.fp32, bf16: gpu.bf16, fp16: gpu.fp16,
+    fp8: gpu.fp8, int8: gpu.int8, int4: gpu.int4, fp4: gpu.fp4
+  };
+  return map[prec] ?? null;
+}
+
+function inferParams(cfg, vocabFallback) {
+  // Some models expose safetensors metadata with total count
+  if (cfg.safetensors?.total) return cfg.safetensors.total;
+  // Estimate from architecture if we have the dims
+  const L = cfg.num_hidden_layers;
+  const H = cfg.hidden_size;
+  const V = cfg.vocab_size ?? vocabFallback;
+  if (!L || !H || !V) return null;
+
+  const attn = 4 * H * H; // Q+K+V+O projections
+  const emb = 2 * V * H; // embedding + lm_head
+
+  // MoE architecture
+  const nRouted = cfg.n_routed_experts ?? cfg.num_experts ?? 0;
+  const moeFFN = cfg.moe_intermediate_size;
+  if (moeFFN && nRouted > 0) {
+    const nShared = cfg.n_shared_experts ?? 0;
+    const freq = cfg.moe_layer_freq ?? 1;
+    const moeLayers = Math.ceil(L / freq);
+    const denseLayers = L - moeLayers;
+    const ffnPerMoeLayer = (nRouted + nShared) * 3 * H * moeFFN;
+    const denseFFN = cfg.intermediate_size;
+    const ffnPerDenseLayer = denseFFN ? 3 * H * denseFFN : 0;
+    return emb + moeLayers * (attn + ffnPerMoeLayer) + denseLayers * (attn + ffnPerDenseLayer);
+  }
+
+  // Dense architecture
+  const FFN = cfg.intermediate_size ?? cfg.ffn_dim ?? cfg.inner_dim;
+  if (!FFN) return null;
+  return emb + L * (attn + 3 * H * FFN);
+}
+
+function inferActiveParams(cfg) {
+  const nRouted = cfg.n_routed_experts ?? cfg.num_experts ?? 0;
+  const moeFFN = cfg.moe_intermediate_size;
+  const activePerTok = cfg.num_experts_per_tok ?? cfg.n_activated_experts ?? null;
+  if (!moeFFN || !nRouted || activePerTok === null) return null;
+
+  const L = cfg.num_hidden_layers;
+  const H = cfg.hidden_size;
+  const V = cfg.vocab_size;
+  if (!L || !H || !V) return null;
+
+  const attn = 4 * H * H;
+  const emb = 2 * V * H;
+  const nShared = cfg.n_shared_experts ?? 0;
+  const freq = cfg.moe_layer_freq ?? 1;
+  const moeLayers = Math.ceil(L / freq);
+  const denseLayers = L - moeLayers;
+
+  const activeFFNPerMoeLayer = (activePerTok + nShared) * 3 * H * moeFFN;
+  const denseFFN = cfg.intermediate_size;
+  const ffnPerDenseLayer = denseFFN ? 3 * H * denseFFN : 0;
+
+  return (emb + moeLayers * (attn + activeFFNPerMoeLayer) + denseLayers * (attn + ffnPerDenseLayer)) / 1e9;
+}
+
+function calcVRAM(model, gpu, precision, gpuCount, batch, seqLen) {
+  const bytesPerParam = PREC_META[precision]?.bytes ?? 2;
+  const totalVram = (gpu?.vram ?? 80) * gpuCount;
+
+  // 1. Weights
+  const paramsB = model.params ?? estimateParams(model);
+  const weightsGB = paramsB ? (paramsB * 1e9 * bytesPerParam) / 1e9 : null;
+
+  // 2. KV Cache
+  // Per token: 2 (K+V) * layers * kvHeads * (hidden/heads) * kvBytes
+  // KV precision matches weight precision, floored at 1 byte (no 4-bit KV in practice)
+  const kvBytes = Math.max(1, bytesPerParam);
+  let kvGB = null;
+  const kvSeq = seqLen || model.context;
+  if (model.layers && model.kvHeads && model.hidden && model.heads && kvSeq) {
+    const headDim = model.hidden / model.heads;
+    const kvPerToken = 2 * model.layers * model.kvHeads * headDim * kvBytes;
+    kvGB = (kvPerToken * kvSeq * batch) / 1e9;
+  }
+
+  // 3. Activations (peak prefill: hidden * seq_len * batch * 4 bytes)
+  // Decode-phase activations are per-token and negligible; this models the prefill peak.
+  let actGB = null;
+  const actSeq = seqLen || model.context;
+  if (model.hidden && actSeq) {
+    actGB = (model.hidden * actSeq * batch * 4) / 1e9;
+  }
+
+  // 4. CUDA overhead (fixed)
+  const cudaGB = 1.0;
+
+  const used = (weightsGB ?? 0) + (kvGB ?? 0) + (actGB ?? 0) + cudaGB;
+  const freeGB = Math.max(0, totalVram - used);
+  const overflow = Math.max(0, used - totalVram);
+
+  return { weightsGB, kvGB, actGB, cudaGB, freeGB, totalVram, used, overflow };
+}
+
+function calcThroughput(model, gpu, precision, gpuCount, batch) {
+  if (!gpu) return null;
+  const prec = precision;
+
+  // Effective TFLOPS across N GPUs
+  let tflops = getTFLOPS(gpu, prec);
+  if (tflops === null) return null;
+  tflops = tflops * gpuCount;
+
+  // Effective memory bandwidth across N GPUs (BW scales with GPU count for TP)
+  const bwGBs = (gpu.bw ?? 3350) * gpuCount;
+
+  const totalParamsB = model.params ?? estimateParams(model);
+  if (!totalParamsB) return null;
+
+  // For MoE: active params drive BW and FLOPs per token; total params size VRAM
+  const paramsB = model.activeParams ?? totalParamsB;
+
+  const bytesPerParam = PREC_META[prec]?.bytes ?? 2;
+  const modelBytes = paramsB * 1e9 * bytesPerParam;
+
+  // Arithmetic intensity threshold (ops/byte) = TFLOPS / BW
+  const ridgePoint = (tflops * 1e12) / (bwGBs * 1e9); // ops/byte
+
+  // Decode step: per-token FLOPs ≈ 2 * active_params (each active weight touched once)
+  const flopsPerToken = 2 * paramsB * 1e9;
+
+  // Memory-bound time per token (decode): load all weights from VRAM
+  const memTimeSec = modelBytes / (bwGBs * 1e9);
+
+  // Compute-bound time per token (prefill-like, batched):
+  // At large batch, arithmetic intensity = 2 * batch * params / modelBytes
+  const arithIntensity = (2 * batch * paramsB * 1e9) / modelBytes;
+
+  const isComputeBound = arithIntensity >= ridgePoint;
+
+  // Throughput estimate using roofline
+  let tokensPerSecPerGpu;
+  if (isComputeBound) {
+    // Compute bound: limited by TFLOPS
+    const computeTimeSec = flopsPerToken / (tflops * 1e12 / batch);
+    tokensPerSecPerGpu = batch / computeTimeSec;
+  } else {
+    // Memory bound: limited by bandwidth
+    // Each new token requires loading model weights
+    tokensPerSecPerGpu = (bwGBs * 1e9) / modelBytes * batch;
+  }
+
+  // Apply realistic MFU (35-50% for memory-bound, 40-55% for compute-bound)
+  const mfu = isComputeBound ? 0.45 : 0.40;
+  const tps = tokensPerSecPerGpu * mfu;
+
+  // FLOPS utilization % = (actual FLOPs used) / (peak FLOPs)
+  const actualFlopsUsed = flopsPerToken * tps;
+  const peakFlops = tflops * 1e12;
+  const flopsUtil = Math.min(100, (actualFlopsUsed / peakFlops) * 100);
+
+  return {
+    tps: Math.round(tps),
+    flopsUtil,
+    isComputeBound,
+    ridgePoint,
+    arithIntensity,
+    mfu,
+    peakTFLOPS: tflops,
+    bwGBs,
+    memTimeSec,
+    flopsPerToken,
+    bytesPerParam,
+  };
+}
+
+function calcMaxBatch(model, gpu, precision, gpuCount, seqLen) {
+  const bytesPerParam = PREC_META[precision]?.bytes ?? 2;
+  const totalVram = (gpu?.vram ?? 80) * gpuCount;
+  const paramsB = model.params ?? estimateParams(model);
+  if (!paramsB) return 1;
+
+  const weightsGB = (paramsB * 1e9 * bytesPerParam) / 1e9;
+  const freeGB = totalVram - weightsGB - 1.0; // minus CUDA overhead
+  if (freeGB <= 0) return 1;
+
+  const kvBytes = Math.max(1, bytesPerParam);
+  let perReqGB = 0;
+  if (model.layers && model.kvHeads && model.hidden && model.heads && seqLen) {
+    const headDim = model.hidden / model.heads;
+    perReqGB += (2 * model.layers * model.kvHeads * headDim * kvBytes * seqLen) / 1e9;
+  }
+  if (model.hidden && seqLen) {
+    perReqGB += (model.hidden * seqLen * 4) / 1e9;
+  }
+  if (perReqGB <= 0) return Math.max(1, Math.floor(freeGB / 0.1)); // fallback
+
+  return Math.max(1, Math.floor(freeGB / perReqGB));
+}
+
+function estimateParams(model) {
+  if (!model.layers || !model.hidden || !model.ffn || !model.vocab) return null;
+  const attn = 4 * model.hidden * model.hidden;
+  const ffn = 3 * model.hidden * model.ffn;
+  const emb = 2 * model.vocab * model.hidden;
+  return (emb + model.layers * (attn + ffn)) / 1e9;
+}
+
+if (typeof module !== 'undefined') {
+  global.PREC_META = require('./gpus.js').PREC_META;
+  module.exports = { getTFLOPS, estimateParams, inferParams, inferActiveParams, calcVRAM, calcThroughput, calcMaxBatch };
+}

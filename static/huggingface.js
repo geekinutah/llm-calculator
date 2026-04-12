@@ -193,3 +193,186 @@
 
   document.addEventListener('DOMContentLoaded', init);
 })();
+
+// ═══════════════════════════════════════════════════════════
+//  HF API FETCHERS
+// ═══════════════════════════════════════════════════════════
+
+async function fetchHFConfig() {
+  const modelId = document.getElementById('hfModelId').value.trim();
+  if (!modelId) return;
+
+  const statusEl = document.getElementById('fetchStatus');
+  const fetchBtn = document.getElementById('fetchBtn');
+
+  statusEl.className = 'fetch-status loading';
+  statusEl.textContent = '⟳ Fetching config.json…';
+  fetchBtn.disabled = true;
+
+  try {
+    const url = `https://huggingface.co/${modelId}/resolve/main/config.json`;
+    const hfToken = document.getElementById('hfToken')?.value.trim();
+    const headers = hfToken ? { 'Authorization': `Bearer ${hfToken}` } : {};
+    const res = await fetch(url, { headers });
+    if (!res.ok) {
+      if (res.status === 401) throw new Error('HTTP 401 — Unauthorized. Add HF Token in Settings');
+      if (res.status === 403) throw new Error('403_FORBIDDEN');
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const rawCfg = await res.json();
+    const subCfg = rawCfg.text_config || rawCfg.language_config || {};
+    // Merge so that top-level properties (like vocab_size/context) are preserved 
+    // even if the model structures its hidden dimensions under text_config.
+    const cfg = { ...rawCfg, ...subCfg };
+
+    // Map common HF config keys → our fields
+    const mappings = {
+      layers: cfg.num_hidden_layers ?? cfg.n_layer ?? cfg.num_layers ?? null,
+      hidden: cfg.hidden_size ?? cfg.d_model ?? cfg.n_embd ?? null,
+      ffn: cfg.intermediate_size ?? cfg.ffn_dim ?? cfg.inner_dim ?? null,
+      heads: cfg.num_attention_heads ?? cfg.n_head ?? null,
+      kvHeads: cfg.num_key_value_heads ?? cfg.num_attention_heads ?? cfg.n_head ?? null,
+      context: cfg.max_position_embeddings ?? cfg.n_positions ?? cfg.max_seq_len ?? null,
+      vocab: cfg.vocab_size ?? null,
+    };
+
+    // --- FALLBACK TIER 2: Network parsing for missing physical specs ---
+    if (!mappings.vocab) {
+      statusEl.textContent = '⟳ Inferring vocab limit (Tier 2)…';
+      const realVocab = await fetchSafetensorsVocab(modelId, headers);
+      if (realVocab) mappings.vocab = realVocab;
+    }
+    
+    const ctxEl = document.getElementById('mContext');
+    ctxEl.classList.remove('error-field'); // reset
+    ctxEl.placeholder = '4096'; // default placeholder
+
+    let finalStatusHtml = `✓ Loaded ${cfg.model_type ?? modelId}`;
+
+    if (!mappings.context) {
+      statusEl.textContent = '⟳ Inferring context limit (Tier 2)…';
+      const realContext = await fetchTokenizerContext(modelId, headers);
+      if (realContext) {
+        mappings.context = realContext;
+      } else {
+        ctxEl.classList.add('error-field');
+        ctxEl.placeholder = '⚠ Enter length!';
+        finalStatusHtml += ` <span style="color:var(--err); font-weight:bold; margin-left:0.5rem">[⚠ Unknown Context Len - enter manually!]</span>`;
+      }
+    }
+
+    // Compute params safely with potential fallbacks loaded
+    mappings.params = inferParams(cfg, mappings.vocab);
+
+    // Infer precision from torch_dtype
+    const dtype = cfg.torch_dtype ?? cfg.dtype;
+    if (dtype) {
+      const dtypeMap = { float32: 'fp32', float16: 'fp16', bfloat16: 'bf16' };
+      const mapped = dtypeMap[dtype];
+      if (mapped) {
+        setPrecision(mapped);
+      }
+    }
+
+    // Fill fields
+    setFieldVal('mParams', mappings.params ? (mappings.params / 1e9).toFixed(2) : '');
+    setFieldVal('mLayers', mappings.layers);
+    setFieldVal('mHidden', mappings.hidden);
+    setFieldVal('mFFN', mappings.ffn);
+    setFieldVal('mHeads', mappings.heads);
+    setFieldVal('mKVHeads', mappings.kvHeads);
+    setFieldVal('mContext', mappings.context);
+    setFieldVal('mVocab', mappings.vocab);
+
+    // Active params — only fill for MoE models
+    const activeP = inferActiveParams(cfg);
+    if (activeP !== null) {
+      setFieldVal('mActiveParams', activeP.toFixed(2));
+    } else {
+      document.getElementById('mActiveParams').value = '';
+    }
+
+    statusEl.className = 'fetch-status ok';
+    statusEl.innerHTML = typeof finalStatusHtml !== 'undefined' ? finalStatusHtml : `✓ Loaded ${cfg.model_type ?? modelId}`;
+
+    recalculate();
+  } catch (e) {
+    statusEl.className = 'fetch-status err';
+    if (e.message === '403_FORBIDDEN') {
+      // safe html injection using text interpolation where needed
+      const safeId = modelId.replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      statusEl.innerHTML = `✗ HTTP 403 — Forbidden. <a href="https://huggingface.co/${safeId}" target="_blank" style="color:inherit;text-decoration:underline;text-underline-offset:2px;">Accept the license here</a>`;
+    } else {
+      statusEl.textContent = e.message.includes('401') ? `✗ ${e.message}` : `✗ ${e.message} — check model ID`;
+    }
+  } finally {
+    fetchBtn.disabled = false;
+  }
+}
+
+async function fetchSafetensorsVocab(modelId, headers) {
+  try {
+    let targetFile = 'model.safetensors';
+    
+    // Check if sharded
+    const idxRes = await fetch(`https://huggingface.co/${modelId}/resolve/main/model.safetensors.index.json`, { headers });
+    if (idxRes.ok) {
+        const idx = await idxRes.json();
+        if (idx.weight_map) {
+            for (const [k, v] of Object.entries(idx.weight_map)) {
+                if (k.includes('embed_tokens') || k.includes('wte') || k.includes('word_embeddings')) {
+                    targetFile = v;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Range Fetch 1: 8 byte INT64 for JSON Header Size
+    const stUrl = `https://huggingface.co/${modelId}/resolve/main/${targetFile}`;
+    const rangeRes = await fetch(stUrl, {
+      headers: { ...headers, 'Range': 'bytes=0-7' }
+    });
+    if (rangeRes.status !== 206 && rangeRes.status !== 200) return null;
+    
+    const buffer = await rangeRes.arrayBuffer();
+    const dataView = new DataView(buffer);
+    const headerLen = Number(dataView.getBigUint64(0, true));
+    if (headerLen <= 0 || headerLen > 100000000) return null; 
+    
+    // Range Fetch 2: Download exact minimal Header JSON
+    const jsonRes = await fetch(stUrl, {
+      headers: { ...headers, 'Range': `bytes=8-${8 + headerLen - 1}` }
+    });
+    if (jsonRes.status !== 206 && jsonRes.status !== 200) return null;
+    
+    const jsonText = await jsonRes.text();
+    const stMeta = JSON.parse(jsonText);
+    
+    // Parse pure mathematical embedding shape map
+    for (const key of Object.keys(stMeta)) {
+      if (key === '__metadata__') continue;
+      if (key.includes('embed_tokens') || key.includes('wte') || key.includes('word_embeddings')) {
+          if (stMeta[key].shape) return stMeta[key].shape[0]; 
+      }
+    }
+  } catch (e) {
+    console.warn("Safetensors vocab fallback failed", e);
+  }
+  return null;
+}
+
+async function fetchTokenizerContext(modelId, headers) {
+  try {
+    const res = await fetch(`https://huggingface.co/${modelId}/resolve/main/tokenizer_config.json`, { headers });
+    if (!res.ok) return null;
+    const txt = await res.json();
+    const len = txt.model_max_length || txt.max_position_embeddings || null;
+    // Tokenizers sometimes define 1e30 as "unbounded". Ignore these dummy values.
+    if (len && len < 10000000) return len;
+  } catch (e) {
+    console.warn("Tokenizer fallback failed", e);
+  }
+  return null;
+}
+

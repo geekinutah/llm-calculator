@@ -19,7 +19,7 @@ const assert   = require('assert/strict');
 const {
   getTFLOPS, estimateParams,
   calcVRAM, calcThroughput, calcMaxBatch,
-} = require('../static/app.js');
+} = require('../static/math.js');
 const { GPU_DB, PREC_META } = require('../static/gpus.js');
 
 // ── Shared fixtures ──────────────────────────────────────────
