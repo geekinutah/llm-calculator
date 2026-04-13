@@ -2,7 +2,7 @@
 //  HuggingFace Model ID Autocomplete
 // ═══════════════════════════════════════════════════════════
 (function () {
-  const HF_API = 'https://huggingface.co/api/models';
+  const HF_API = '/api/hf-proxy/api/models';
   const DEBOUNCE_MS = 300;
   const MAX_RESULTS = 8;
 
@@ -210,7 +210,7 @@ async function fetchHFConfig() {
   fetchBtn.disabled = true;
 
   try {
-    const url = `https://huggingface.co/${modelId}/resolve/main/config.json`;
+    const url = `/api/hf-proxy/${modelId}/resolve/main/config.json`;
     const hfToken = document.getElementById('hfToken')?.value.trim();
     const headers = hfToken ? { 'Authorization': `Bearer ${hfToken}` } : {};
     const res = await fetch(url, { headers });
@@ -315,7 +315,7 @@ async function fetchSafetensorsVocab(modelId, headers) {
     let targetFile = 'model.safetensors';
     
     // Check if sharded
-    const idxRes = await fetch(`https://huggingface.co/${modelId}/resolve/main/model.safetensors.index.json`, { headers });
+    const idxRes = await fetch(`/api/hf-proxy/${modelId}/resolve/main/model.safetensors.index.json`, { headers });
     if (idxRes.ok) {
         const idx = await idxRes.json();
         if (idx.weight_map) {
@@ -329,7 +329,7 @@ async function fetchSafetensorsVocab(modelId, headers) {
     }
 
     // Range Fetch 1: 8 byte INT64 for JSON Header Size
-    const stUrl = `https://huggingface.co/${modelId}/resolve/main/${targetFile}`;
+    const stUrl = `/api/hf-proxy/${modelId}/resolve/main/${targetFile}`;
     const rangeRes = await fetch(stUrl, {
       headers: { ...headers, 'Range': 'bytes=0-7' }
     });
@@ -364,7 +364,7 @@ async function fetchSafetensorsVocab(modelId, headers) {
 
 async function fetchTokenizerContext(modelId, headers) {
   try {
-    const res = await fetch(`https://huggingface.co/${modelId}/resolve/main/tokenizer_config.json`, { headers });
+    const res = await fetch(`/api/hf-proxy/${modelId}/resolve/main/tokenizer_config.json`, { headers });
     if (!res.ok) return null;
     const txt = await res.json();
     const len = txt.model_max_length || txt.max_position_embeddings || null;
