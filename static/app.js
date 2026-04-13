@@ -36,7 +36,6 @@ let state = {
 function onGpuChange() {
   const v = document.getElementById('gpuSelect').value;
   const customFields = document.getElementById('customGpuFields');
-  const disclaimer = document.getElementById('b200Disclaimer');
 
   if (v === 'custom') {
     customFields.classList.add('show');
@@ -48,8 +47,7 @@ function onGpuChange() {
     customFields.classList.remove('show');
     state.gpu = null;
   }
-
-  disclaimer.classList.toggle('show', !!(v && GPU_DB[v]?.estimated));
+  
   updatePcieWarning();
   updatePrecisionPills();
   recalculate();

@@ -16,22 +16,21 @@
 const GPU_DB = {
   // ── Blackwell ──────────────────────────────────────────────
   b200: {
-    name: 'B200 SXM ★',
+    name: 'B200 SXM',
     arch: 'blackwell',
     archOrder: 10,
     category: 'datacenter',
     memType: 'HBM3e',
     vram: 192,
     bw: 8000,
-    fp32: 90,
+    fp32: 75,
     bf16: 2250,
     fp16: 2250,
     fp8: 4500,
     int8: 4500,
     int4: 4500,
     fp4: 9000,
-    interconnect: { nvlink_gbps: 1800, pcie_gen: 5 },
-    estimated: true,
+    interconnect: { nvlink_gbps: 1800, pcie_gen: 6 },
   },
   rtx_5090: {
     name: 'RTX 5090',
