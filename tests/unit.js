@@ -237,6 +237,23 @@ test('calcThroughput — compute-bound: exact token/s at crossover batch', () =>
   assert.strictEqual(tp.tps, 10029);
 });
 
+test('calcThroughput — ridgeBatch is exactly ceil(ridgePoint × bytesPerParam / 2)', () => {
+  // A100 PCIe BF16: ridgePoint = 312e12/1935e9 ≈ 161.24, bytesPerParam = 2
+  // ridgeBatch = ceil(161.24 × 2 / 2) = ceil(161.24) = 162
+  const tp = calcThroughput(MODEL_PARAMS, A100P, 'bf16', 1, 1);
+  assert.strictEqual(tp.ridgeBatch, Math.ceil(tp.ridgePoint * tp.bytesPerParam / 2));
+  assert.strictEqual(tp.ridgeBatch, 162);
+});
+
+test('calcThroughput — ridgeBatch is the exact compute-bound crossover point', () => {
+  // ridgeBatch must be compute-bound; ridgeBatch-1 must still be memory-bound
+  const tp = calcThroughput(MODEL_PARAMS, A100P, 'bf16', 1, 1);
+  const atRidge  = calcThroughput(MODEL_PARAMS, A100P, 'bf16', 1, tp.ridgeBatch);
+  const belowRidge = calcThroughput(MODEL_PARAMS, A100P, 'bf16', 1, tp.ridgeBatch - 1);
+  assert.strictEqual(atRidge.isComputeBound,    true);
+  assert.strictEqual(belowRidge.isComputeBound, false);
+});
+
 test('calcThroughput — MoE active params drive throughput, not total params', () => {
   // MoE {params:235, activeParams:22} should equal dense {params:22}
   // because paramsB = activeParams ?? params

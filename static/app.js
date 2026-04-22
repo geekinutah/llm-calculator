@@ -175,7 +175,7 @@ function readBatch() {
 // ═══════════════════════════════════════════════════════════
 
 
-function renderScenarios(model, gpu, precision, gpuCount, seqLen) {
+function renderScenarios(model, gpu, precision, gpuCount) {
   const panel = document.getElementById('scenariosPanel');
   const tp = calcThroughput(model, gpu, precision, gpuCount, 1);
   if (!tp) {
@@ -184,9 +184,10 @@ function renderScenarios(model, gpu, precision, gpuCount, seqLen) {
     return;
   }
 
-  const maxBatch = calcMaxBatch(model, gpu, precision, gpuCount, seqLen);
-  const tpMax = calcThroughput(model, gpu, precision, gpuCount, maxBatch);
-  const tpMid = calcThroughput(model, gpu, precision, gpuCount, 32);
+  const ridgeBatch = tp.ridgeBatch;
+  const balancedBatch = Math.min(32, ridgeBatch);
+  const tpMax = calcThroughput(model, gpu, precision, gpuCount, ridgeBatch);
+  const tpMid = calcThroughput(model, gpu, precision, gpuCount, balancedBatch);
 
   const rows = [
     {
@@ -198,17 +199,17 @@ function renderScenarios(model, gpu, precision, gpuCount, seqLen) {
     },
     {
       label: 'Balanced',
-      sub: 'batch 32 · production baseline',
+      sub: `batch ${balancedBatch} · production baseline`,
       tps: tpMid?.tps ?? 0,
       cls: '',
-      tip: 'Batch=32: a reasonable continuous-batching baseline for a production API.\n\nThroughput scales linearly with batch while memory-bound. Each user waits slightly longer, but the system serves 32× more tokens per second than batch=1.\n\nTypical starting point for vLLM / TRT-LLM deployments.',
+      tip: `Batch=${balancedBatch}: a reasonable continuous-batching baseline for a production API.\n\nThroughput scales linearly with batch while memory-bound. Each user waits slightly longer, but the system serves ${balancedBatch}× more tokens per second than batch=1.\n\nTypical starting point for vLLM / TRT-LLM deployments.`,
     },
     {
       label: 'Max Throughput',
-      sub: `batch ${maxBatch} · VRAM ceiling`,
+      sub: `batch ${ridgeBatch} · roofline peak`,
       tps: tpMax?.tps ?? 0,
       cls: 'worst',
-      tip: `Batch=${maxBatch}: the largest batch that fits in VRAM given your seq length.\n\nFree VRAM after weights is divided by (KV cache + activations) per request at the configured seq length.\n\nHighest total tokens/sec for the system, but each user's response latency is highest. Beyond this batch size the model OOMs.`,
+      tip: `Batch=${ridgeBatch}: the roofline ridge point where the workload transitions from memory-bound to compute-bound.\n\nBelow this batch, throughput scales linearly with batch (memory bandwidth is the bottleneck). At this batch, compute and bandwidth are both saturated — this is the theoretical maximum tokens/sec for this hardware.\n\nFormula: ridgeBatch = (TFLOPS / BW) × bytes_per_param / 2`,
     },
   ];
 
@@ -239,7 +240,14 @@ function recalculate() {
   const hasGPU = !!gpu;
   const hasModel = !!(model.params || (model.layers && model.hidden && model.ffn));
 
-  renderScenarios(model, gpu, prec, N, batch.output);
+  renderScenarios(model, gpu, prec, N);
+
+  const seqLenEl = document.getElementById('bOutput');
+  if (model.context && batch.output > model.context) {
+    seqLenEl.classList.add('error-field');
+  } else {
+    seqLenEl.classList.remove('error-field');
+  }
 
   if (!hasGPU || !hasModel) {
     document.getElementById('emptyState').style.display = 'flex';

@@ -163,8 +163,11 @@ function calcThroughput(model, gpu, precision, gpuCount, batch) {
   const peakFlops = tflops * 1e12;
   const flopsUtil = Math.min(100, (actualFlopsUsed / peakFlops) * 100);
 
+  const ridgeBatch = Math.max(1, Math.ceil(ridgePoint * bytesPerParam / 2));
+
   return {
     tps: Math.round(tps),
+    ridgeBatch,
     flopsUtil,
     isComputeBound,
     ridgePoint,

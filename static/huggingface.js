@@ -282,6 +282,7 @@ async function fetchHFConfig() {
     setFieldVal('mHeads', mappings.heads);
     setFieldVal('mKVHeads', mappings.kvHeads);
     setFieldVal('mContext', mappings.context);
+    setFieldVal('bOutput', mappings.context);
     setFieldVal('mVocab', mappings.vocab);
 
     // Active params — only fill for MoE models
