@@ -17,7 +17,7 @@
 const { test } = require('node:test');
 const assert   = require('assert/strict');
 const {
-  getTFLOPS, estimateParams,
+  getTFLOPS, estimateParams, inferParams, inferActiveParams,
   calcVRAM, calcThroughput, calcMaxBatch,
 } = require('../static/math.js');
 const { GPU_DB, PREC_META } = require('../static/gpus.js');
@@ -296,4 +296,126 @@ test('calcMaxBatch — more GPUs means more free VRAM and a larger maxBatch', ()
 test('calcMaxBatch — returns 1 when model does not fit in VRAM', () => {
   // 79B @ BF16 = 158 GB > 80 GB → freeGB <= 0 → maxBatch = 1
   assert.strictEqual(calcMaxBatch({ params: 79 }, A100P, 'bf16', 1, 2048), 1);
+});
+
+// ═══════════════════════════════════════════════════════════
+//  inferParams
+// ═══════════════════════════════════════════════════════════
+//
+//  Dense formula (same as estimateParams but keyed on HF config names):
+//    emb  = 2 × vocab_size × hidden_size
+//    attn = 4 × hidden_size²
+//    ffn  = 3 × hidden_size × intermediate_size
+//    total = emb + num_hidden_layers × (attn + ffn)
+//
+//  MoE formula:
+//    ffnPerMoeLayer = (n_routed_experts + n_shared_experts) × 3 × hidden × moe_ffn
+//    total = emb + moeLayers × (attn + ffnPerMoeLayer) + denseLayers × (attn + denseFFN)
+
+test('inferParams — dense: Llama-3.1-8B HF config keys map correctly', () => {
+  // emb  = 2 × 128256 × 4096 = 1,050,673,152
+  // attn = 4 × 4096²          =    67,108,864
+  // ffn  = 3 × 4096 × 14336   =   176,160,768
+  // total = 1,050,673,152 + 32 × 243,269,632 = 8,835,301,376
+  assert.strictEqual(
+    inferParams({
+      num_hidden_layers: 32, hidden_size: 4096,
+      vocab_size: 128256, intermediate_size: 14336,
+    }),
+    8_835_301_376,
+  );
+});
+
+test('inferParams — dense: returns null when a required field is missing', () => {
+  assert.strictEqual(inferParams({ num_hidden_layers: 32, hidden_size: 4096, intermediate_size: 14336 }), null); // no vocab
+  assert.strictEqual(inferParams({ num_hidden_layers: 32, hidden_size: 4096, vocab_size: 32000 }),          null); // no ffn (dense path)
+});
+
+test('inferParams — MoE: n_routed_experts + moe_intermediate_size (Mixtral/DeepSeek style)', () => {
+  // emb  = 2 × 32000 × 4096 = 262,144,000
+  // attn = 4 × 4096²         =  67,108,864
+  // ffnPerMoeLayer = 8 × 3 × 4096 × 14336 = 1,409,286,144
+  // moeLayers = ceil(32/1) = 32, denseLayers = 0
+  // total = 262,144,000 + 32 × (67,108,864 + 1,409,286,144) = 47,506,784,256
+  assert.strictEqual(
+    inferParams({
+      num_hidden_layers: 32, hidden_size: 4096,
+      vocab_size: 32000,
+      n_routed_experts: 8, moe_intermediate_size: 14336,
+    }),
+    47_506_784_256,
+  );
+});
+
+test('inferParams — MoE: num_local_experts + intermediate_size fallback (gpt_oss style)', () => {
+  // emb  = 2 × 201088 × 2880 = 1,158,266,880
+  // attn = 4 × 2880²          =    33,177,600
+  // ffnPerMoeLayer = 128 × 3 × 2880 × 2880 = 3,185,049,600
+  // moeLayers = ceil(36/1) = 36, denseLayers = 0
+  // total = 1,158,266,880 + 36 × (33,177,600 + 3,185,049,600) = 117,014,446,080
+  assert.strictEqual(
+    inferParams({
+      num_hidden_layers: 36, hidden_size: 2880,
+      vocab_size: 201088,
+      num_local_experts: 128, intermediate_size: 2880,
+    }),
+    117_014_446_080,
+  );
+});
+
+test('inferParams — MoE: safetensors.total shortcut takes priority over architecture', () => {
+  // When the HF metadata includes a direct param count, use it as-is.
+  assert.strictEqual(
+    inferParams({ safetensors: { total: 7_000_000_000 }, num_hidden_layers: 32, hidden_size: 4096, vocab_size: 128256, intermediate_size: 14336 }),
+    7_000_000_000,
+  );
+});
+
+// ═══════════════════════════════════════════════════════════
+//  inferActiveParams
+// ═══════════════════════════════════════════════════════════
+
+test('inferActiveParams — returns null for dense models (no expert keys)', () => {
+  assert.strictEqual(
+    inferActiveParams({ num_hidden_layers: 32, hidden_size: 4096, vocab_size: 128256, intermediate_size: 14336 }),
+    null,
+  );
+});
+
+test('inferActiveParams — returns null when active-expert count is missing', () => {
+  // Has experts but no num_experts_per_tok / n_activated_experts / experts_per_token
+  assert.strictEqual(
+    inferActiveParams({ num_hidden_layers: 32, hidden_size: 4096, vocab_size: 32000, n_routed_experts: 8, moe_intermediate_size: 14336 }),
+    null,
+  );
+});
+
+test('inferActiveParams — num_local_experts + num_experts_per_tok (gpt_oss style)', () => {
+  // emb  = 2 × 201088 × 2880 = 1,158,266,880
+  // attn = 4 × 2880²          =    33,177,600
+  // activeFFNPerMoeLayer = 4 × 3 × 2880 × 2880 = 99,532,800
+  // total = (1,158,266,880 + 36 × (33,177,600 + 99,532,800)) / 1e9
+  //       = 5,935,841,280 / 1e9 = 5.93584128
+  assert.strictEqual(
+    inferActiveParams({
+      num_hidden_layers: 36, hidden_size: 2880,
+      vocab_size: 201088,
+      num_local_experts: 128, intermediate_size: 2880,
+      num_experts_per_tok: 4,
+    }),
+    5_935_841_280 / 1e9,
+  );
+});
+
+test('inferActiveParams — experts_per_token alias resolves correctly', () => {
+  // Same result as above but using experts_per_token instead of num_experts_per_tok
+  assert.strictEqual(
+    inferActiveParams({
+      num_hidden_layers: 36, hidden_size: 2880,
+      vocab_size: 201088,
+      num_local_experts: 128, intermediate_size: 2880,
+      experts_per_token: 4,
+    }),
+    5_935_841_280 / 1e9,
+  );
 });

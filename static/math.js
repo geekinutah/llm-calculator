@@ -24,8 +24,9 @@ function inferParams(cfg, vocabFallback) {
   const emb = 2 * V * H; // embedding + lm_head
 
   // MoE architecture
-  const nRouted = cfg.n_routed_experts ?? cfg.num_experts ?? 0;
-  const moeFFN = cfg.moe_intermediate_size;
+  const nRouted = cfg.n_routed_experts ?? cfg.num_experts ?? cfg.num_local_experts ?? 0;
+  // gpt_oss and similar models store expert FFN size in intermediate_size
+  const moeFFN = cfg.moe_intermediate_size ?? (nRouted > 0 ? cfg.intermediate_size : null);
   if (moeFFN && nRouted > 0) {
     const nShared = cfg.n_shared_experts ?? 0;
     const freq = cfg.moe_layer_freq ?? 1;
@@ -44,9 +45,9 @@ function inferParams(cfg, vocabFallback) {
 }
 
 function inferActiveParams(cfg) {
-  const nRouted = cfg.n_routed_experts ?? cfg.num_experts ?? 0;
-  const moeFFN = cfg.moe_intermediate_size;
-  const activePerTok = cfg.num_experts_per_tok ?? cfg.n_activated_experts ?? null;
+  const nRouted = cfg.n_routed_experts ?? cfg.num_experts ?? cfg.num_local_experts ?? 0;
+  const moeFFN = cfg.moe_intermediate_size ?? (nRouted > 0 ? cfg.intermediate_size : null);
+  const activePerTok = cfg.num_experts_per_tok ?? cfg.n_activated_experts ?? cfg.experts_per_token ?? null;
   if (!moeFFN || !nRouted || activePerTok === null) return null;
 
   const L = cfg.num_hidden_layers;
