@@ -250,21 +250,21 @@ function renderScenarios(model, gpu, precision, gpuCount, expertPrecision = prec
       sub: 'batch 1 · lowest response time',
       tps: tp.tps,
       cls: 'best',
-      tip: 'Batch=1: one user, no queuing. The GPU streams all weights once per token — pure memory-bandwidth limit.\n\nFormula: BW × N_GPUs / model_bytes × MFU\n\nThis is the fastest a single user can receive tokens. Latency is minimized; GPU utilization is low.',
+      tip: 'Batch=1: one user, no queuing. The GPU streams all weights once per token — pure memory-bandwidth limit.\n\nFormula: BW × N_GPUs / model_bytes × MFU\n\nThis is the fastest a single user can receive tokens. Latency is minimized; GPU utilization is low.\n\nNote: these scenarios are roofline-only (model params + hardware). Batch × seq_len determines KV cache footprint — see the VRAM panel for whether a given batch actually fits.',
     },
     {
       label: 'Balanced',
       sub: `batch ${balancedBatch} · production baseline`,
       tps: tpMid?.tps ?? 0,
       cls: '',
-      tip: `Batch=${balancedBatch}: a reasonable continuous-batching baseline for a production API.\n\nThroughput scales linearly with batch while memory-bound. Each user waits slightly longer, but the system serves ${balancedBatch}× more tokens per second than batch=1.\n\nTypical starting point for vLLM / TRT-LLM deployments.`,
+      tip: `Batch=${balancedBatch}: a reasonable continuous-batching baseline for a production API.\n\nThroughput scales linearly with batch while memory-bound. Each user waits slightly longer, but the system serves ${balancedBatch}× more tokens per second than batch=1.\n\nTypical starting point for vLLM / TRT-LLM deployments.\n\nNote: batch × seq_len determines KV cache footprint — see the VRAM panel to confirm this batch fits at your context length.`,
     },
     {
       label: 'Max Throughput',
       sub: `batch ${ridgeBatch} · roofline peak`,
       tps: tpMax?.tps ?? 0,
       cls: 'worst',
-      tip: `Batch=${ridgeBatch}: the roofline ridge point where the workload transitions from memory-bound to compute-bound.\n\nBelow this batch, throughput scales linearly with batch (memory bandwidth is the bottleneck). At this batch, compute and bandwidth are both saturated — this is the theoretical maximum tokens/sec for this hardware.\n\nFormula: ridgeBatch = (TFLOPS / BW) × bytes_per_param / 2`,
+      tip: `Batch=${ridgeBatch}: the roofline ridge point where the workload transitions from memory-bound to compute-bound.\n\nBelow this batch, throughput scales linearly with batch (memory bandwidth is the bottleneck). At this batch, compute and bandwidth are both saturated — this is the theoretical maximum tokens/sec for this hardware.\n\nFormula: ridgeBatch = (TFLOPS / BW) × bytes_per_param / 2\n\nNote: batch × seq_len determines KV cache footprint — at long context this batch may exceed available VRAM. See the VRAM panel.`,
     },
   ];
 
