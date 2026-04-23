@@ -455,6 +455,16 @@ test('calcThroughput — dense model: single precision = two identical precision
   assert.strictEqual(single.tps, double.tps);
 });
 
+test('calcVRAM — KV cache uses otherPrecision (BF16) not expertPrecision (INT4)', () => {
+  // KV cache is produced by attention layers which run at otherPrecision.
+  // INT4 expert precision must not bleed into the KV byte calculation.
+  const int4uniform = calcVRAM(MODEL_MOE_SPLIT, A100P, 'int4', 1, 1, 4096);
+  const mixed       = calcVRAM(MODEL_MOE_SPLIT, A100P, 'bf16', 1, 1, 4096, 'int4', 'bf16');
+  // uniform INT4: kvBytes = max(1, 0.5) = 1; mixed BF16 other: kvBytes = max(1, 2) = 2
+  assert.ok(mixed.kvGB > int4uniform.kvGB, `mixed KV (${mixed.kvGB}) should be > INT4 KV (${int4uniform.kvGB})`);
+  assert.strictEqual(mixed.kvGB, int4uniform.kvGB * 2);
+});
+
 test('calcMaxBatch — MoE mixed precision: INT4 expert weights allow larger batch than BF16', () => {
   const bf16only = calcMaxBatch(MODEL_MOE_SPLIT, A100P, 'bf16', 1, 256);
   const mixed    = calcMaxBatch(MODEL_MOE_SPLIT, A100P, 'bf16', 1, 256, 'int4', 'bf16');

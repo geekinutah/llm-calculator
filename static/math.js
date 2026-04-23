@@ -90,7 +90,6 @@ function splitMoEParams(model) {
 function calcVRAM(model, gpu, precision, gpuCount, batch, seqLen, expertPrecision = precision, otherPrecision = precision) {
   const expertBytes = PREC_META[expertPrecision]?.bytes ?? 2;
   const otherBytes  = PREC_META[otherPrecision]?.bytes  ?? 2;
-  const bytesPerParam = PREC_META[precision]?.bytes ?? 2; // kept for KV cache calc
   const totalVram = (gpu?.vram ?? 80) * gpuCount;
 
   // 1. Weights
@@ -111,8 +110,9 @@ function calcVRAM(model, gpu, precision, gpuCount, batch, seqLen, expertPrecisio
 
   // 2. KV Cache
   // Per token: 2 (K+V) * layers * kvHeads * (hidden/heads) * kvBytes
-  // KV precision matches weight precision, floored at 1 byte (no 4-bit KV in practice)
-  const kvBytes = Math.max(1, bytesPerParam);
+  // KV is produced by attention layers, which run at otherPrecision (typically BF16),
+  // not at the quantized expert precision. Floor at 1 byte (no sub-byte KV in practice).
+  const kvBytes = Math.max(1, otherBytes);
   let kvGB = null;
   const kvSeq = seqLen || model.context;
   if (model.layers && model.kvHeads && model.hidden && model.heads && kvSeq) {
@@ -237,7 +237,6 @@ function calcThroughput(model, gpu, precision, gpuCount, batch, expertPrecision 
 function calcMaxBatch(model, gpu, precision, gpuCount, seqLen, expertPrecision = precision, otherPrecision = precision) {
   const expertBytes = PREC_META[expertPrecision]?.bytes ?? 2;
   const otherBytes  = PREC_META[otherPrecision]?.bytes  ?? 2;
-  const bytesPerParam = PREC_META[precision]?.bytes ?? 2; // for KV
   const totalVram = (gpu?.vram ?? 80) * gpuCount;
   const paramsB = model.params ?? estimateParams(model);
   if (!paramsB) return 1;
@@ -254,7 +253,7 @@ function calcMaxBatch(model, gpu, precision, gpuCount, seqLen, expertPrecision =
   const freeGB = totalVram - weightsGB - 1.0; // minus CUDA overhead
   if (freeGB <= 0) return 1;
 
-  const kvBytes = Math.max(1, bytesPerParam);
+  const kvBytes = Math.max(1, otherBytes); // KV lives in attention layers → otherPrecision
   let perReqGB = 0;
   if (model.layers && model.kvHeads && model.hidden && model.heads && seqLen) {
     const headDim = model.hidden / model.heads;
