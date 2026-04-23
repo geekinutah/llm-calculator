@@ -16,11 +16,12 @@
     --purple:    #b388ff;
 
     /* VRAM segment colors */
-    --c-weights:    #3d8bff;
-    --c-kvcache:    #00e5b0;
-    --c-activations:#ffd740;
-    --c-cuda:       #b388ff;
-    --c-free:       #1e2530;
+    --c-weights:       #3d8bff;
+    --c-other-weights: #1a5cbf;
+    --c-kvcache:       #00e5b0;
+    --c-activations:   #ffd740;
+    --c-cuda:          #b388ff;
+    --c-free:          #1e2530;
 
     --font-mono: 'IBM Plex Mono', monospace;
     --font-sans: 'IBM Plex Sans', sans-serif;
@@ -492,10 +493,11 @@
     height: 100%;
     background: rgba(0,0,0,0.3);
   }
-  .vram-seg-weights     { background: var(--c-weights); }
-  .vram-seg-kv          { background: var(--c-kvcache); }
-  .vram-seg-activations { background: var(--c-activations); }
-  .vram-seg-cuda        { background: var(--c-cuda); }
+  .vram-seg-weights       { background: var(--c-weights); }
+  .vram-seg-other-weights { background: var(--c-other-weights); }
+  .vram-seg-kv            { background: var(--c-kvcache); }
+  .vram-seg-activations   { background: var(--c-activations); }
+  .vram-seg-cuda          { background: var(--c-cuda); }
 
   /* overflow indicator */
   .vram-overflow {

@@ -18,10 +18,14 @@ let state = {
   gpu: null,
   gpuCount: 1,
   precision: 'bf16',
+  expertPrecision: 'bf16',   // NEW: precision for quantized FFN/expert weights
+  otherPrecision: 'bf16',    // NEW: precision for always-BF16 attention+embed weights
   model: {
     params: null, layers: null, hidden: null,
     ffn: null, heads: null, kvHeads: null,
     context: null, vocab: null,
+    nExperts: null, nActive: null, moeIntermediateSize: null,  // NEW: MoE architecture fields
+    activeParams: null,  // kept for legacy fallback
   },
   batch: { batch: null, output: null },
   // animated gauge value
@@ -86,9 +90,35 @@ function updatePcieWarning() {
 // ═══════════════════════════════════════════════════════════
 function setPrecision(p) {
   const pill = document.querySelector(`[data-prec="${p}"]`);
-  if (pill.classList.contains('disabled')) return;
+  if (!pill || pill.classList.contains('disabled')) return;
   state.precision = p;
-  document.querySelectorAll('.pill').forEach(el => el.classList.remove('active'));
+  state.expertPrecision = p;
+  state.otherPrecision = p;
+  // update expert pills active state
+  document.querySelectorAll('[data-prec]').forEach(el => el.classList.remove('active'));
+  pill.classList.add('active');
+  // update other pills active state
+  document.querySelectorAll('[data-prec-other]').forEach(el => el.classList.remove('active'));
+  const otherPill = document.querySelector(`[data-prec-other="${p}"]`);
+  if (otherPill) otherPill.classList.add('active');
+  recalculate();
+}
+
+function setExpertPrecision(p) {
+  const pill = document.querySelector(`[data-prec="${p}"]`);
+  if (!pill || pill.classList.contains('disabled')) return;
+  state.expertPrecision = p;
+  state.precision = p; // keep legacy field in sync for single-precision models
+  document.querySelectorAll('[data-prec]').forEach(el => el.classList.remove('active'));
+  pill.classList.add('active');
+  recalculate();
+}
+
+function setOtherPrecision(p) {
+  const pill = document.querySelector(`[data-prec-other="${p}"]`);
+  if (!pill) return;
+  state.otherPrecision = p;
+  document.querySelectorAll('[data-prec-other]').forEach(el => el.classList.remove('active'));
   pill.classList.add('active');
   recalculate();
 }
@@ -96,16 +126,30 @@ function setPrecision(p) {
 function updatePrecisionPills() {
   const gpu = state.gpu;
   const noteEl = document.getElementById('precNote');
-  document.querySelectorAll('.pill').forEach(pill => {
+
+  // Update expert precision pills ([data-prec])
+  document.querySelectorAll('[data-prec]').forEach(pill => {
     const p = pill.dataset.prec;
     const supported = !gpu || getTFLOPS(gpu, p) !== null;
     pill.classList.toggle('disabled', !supported);
   });
 
-  // If current precision became unsupported, fall back
+  // Update other precision pills ([data-prec-other])
+  document.querySelectorAll('[data-prec-other]').forEach(pill => {
+    const p = pill.dataset.precOther;
+    const supported = !gpu || getTFLOPS(gpu, p) !== null;
+    pill.classList.toggle('disabled', !supported);
+  });
+
+  // If expert precision became unsupported, fall back
   if (gpu && getTFLOPS(gpu, state.precision) === null) {
     const fallback = ['bf16', 'fp16', 'int8', 'fp32'].find(p => getTFLOPS(gpu, p) !== null) || 'bf16';
     setPrecision(fallback);
+  }
+
+  // If other precision became unsupported, fall back to bf16
+  if (gpu && getTFLOPS(gpu, state.otherPrecision) === null) {
+    setOtherPrecision('bf16');
   }
 
   // INT4 note
@@ -145,15 +189,18 @@ function setFieldVal(id, val) {
 // ═══════════════════════════════════════════════════════════
 function readModel() {
   return {
-    params: +document.getElementById('mParams').value || null,
-    activeParams: +document.getElementById('mActiveParams').value || null,
-    layers: +document.getElementById('mLayers').value || null,
-    hidden: +document.getElementById('mHidden').value || null,
-    ffn: +document.getElementById('mFFN').value || null,
-    heads: +document.getElementById('mHeads').value || null,
-    kvHeads: +document.getElementById('mKVHeads').value || null,
-    context: +document.getElementById('mContext').value || null,
-    vocab: +document.getElementById('mVocab').value || null,
+    params:              +document.getElementById('mParams').value      || null,
+    activeParams:        +document.getElementById('mActiveParams').value || null,
+    layers:              +document.getElementById('mLayers').value      || null,
+    hidden:              +document.getElementById('mHidden').value      || null,
+    ffn:                 +document.getElementById('mFFN').value         || null,
+    heads:               +document.getElementById('mHeads').value       || null,
+    kvHeads:             +document.getElementById('mKVHeads').value     || null,
+    context:             +document.getElementById('mContext').value     || null,
+    vocab:               +document.getElementById('mVocab').value       || null,
+    nExperts:            +document.getElementById('mNExperts').value    || null,
+    nActive:             +document.getElementById('mNActive').value     || null,
+    moeIntermediateSize: +document.getElementById('mMoeFFN').value      || null,
   };
 }
 
@@ -175,9 +222,9 @@ function readBatch() {
 // ═══════════════════════════════════════════════════════════
 
 
-function renderScenarios(model, gpu, precision, gpuCount) {
+function renderScenarios(model, gpu, precision, gpuCount, expertPrecision = precision, otherPrecision = precision) {
   const panel = document.getElementById('scenariosPanel');
-  const tp = calcThroughput(model, gpu, precision, gpuCount, 1);
+  const tp = calcThroughput(model, gpu, precision, gpuCount, 1, expertPrecision, otherPrecision);
   if (!tp) {
     panel.className = 'scenarios-empty';
     panel.innerHTML = '— configure GPU &amp; model —';
@@ -186,8 +233,8 @@ function renderScenarios(model, gpu, precision, gpuCount) {
 
   const ridgeBatch = tp.ridgeBatch;
   const balancedBatch = Math.min(32, ridgeBatch);
-  const tpMax = calcThroughput(model, gpu, precision, gpuCount, ridgeBatch);
-  const tpMid = calcThroughput(model, gpu, precision, gpuCount, balancedBatch);
+  const tpMax = calcThroughput(model, gpu, precision, gpuCount, ridgeBatch, expertPrecision, otherPrecision);
+  const tpMid = calcThroughput(model, gpu, precision, gpuCount, balancedBatch, expertPrecision, otherPrecision);
 
   const rows = [
     {
@@ -235,12 +282,14 @@ function recalculate() {
   const batch = readBatch();
   const gpu = state.gpu;
   const prec = state.precision;
+  const ePrec = state.expertPrecision;
+  const oPrec = state.otherPrecision;
   const N = state.gpuCount;
 
   const hasGPU = !!gpu;
   const hasModel = !!(model.params || (model.layers && model.hidden && model.ffn));
 
-  renderScenarios(model, gpu, prec, N);
+  renderScenarios(model, gpu, prec, N, ePrec, oPrec);
 
   const seqLenEl = document.getElementById('bOutput');
   if (model.context && batch.output > model.context) {
@@ -257,8 +306,8 @@ function recalculate() {
 
   document.getElementById('emptyState').style.display = 'none';
 
-  const vram = calcVRAM(model, gpu, prec, N, batch.batch, batch.output);
-  const throughput = calcThroughput(model, gpu, prec, N, batch.batch);
+  const vram = calcVRAM(model, gpu, prec, N, batch.batch, batch.output, ePrec, oPrec);
+  const throughput = calcThroughput(model, gpu, prec, N, batch.batch, ePrec, oPrec);
 
   renderResults(model, gpu, prec, N, batch, vram, throughput);
   serializeState();
@@ -282,7 +331,7 @@ function renderResults(model, gpu, prec, N, batch, vram, tp) {
 
   // Cost card — uses Balanced (batch=32) TPS as the pricing anchor
   const costPerHr = (+document.getElementById('gpuCostPerHr').value || 2.50) * N;
-  const tpBalanced = calcThroughput(model, gpu, prec, N, 32);
+  const tpBalanced = calcThroughput(model, gpu, prec, N, 32, state.expertPrecision, state.otherPrecision);
   let costVal = '—', costSub = '';
   if (tpBalanced) {
     const cPerMTok = (costPerHr / (tpBalanced.tps * 3600)) * 1e6;
@@ -408,8 +457,16 @@ function renderResults(model, gpu, prec, N, batch, vram, tp) {
 
 function buildVRAMHTML(v) {
   const total = v.totalVram;
+  const hasMoESplit = v.expertWeightsGB !== null && v.otherWeightsGB !== null;
+  const weightSegs = hasMoESplit
+    ? [
+        { key: 'expert-weights', gb: v.expertWeightsGB, label: 'Expert Weights', cls: 'vram-seg-weights' },
+        { key: 'other-weights',  gb: v.otherWeightsGB,  label: 'Other Weights',  cls: 'vram-seg-other-weights' },
+      ]
+    : [{ key: 'weights', gb: v.weightsGB, label: 'Weights', cls: 'vram-seg-weights' }];
+
   const segs = [
-    { key: 'weights', gb: v.weightsGB, label: 'Weights', cls: 'vram-seg-weights' },
+    ...weightSegs,
     { key: 'kv', gb: v.kvGB, label: 'KV Cache', cls: 'vram-seg-kv' },
     { key: 'activations', gb: v.actGB, label: 'Activations', cls: 'vram-seg-activations' },
     { key: 'cuda', gb: v.cudaGB, label: 'CUDA/FW', cls: 'vram-seg-cuda' },
@@ -423,7 +480,9 @@ function buildVRAMHTML(v) {
   const overflowPct = v.overflow > 0 ? Math.min(100, (v.overflow / total) * 100) : 0;
 
   // Legend entries
-  const dotColors = ['var(--c-weights)', 'var(--c-kvcache)', 'var(--c-activations)', 'var(--c-cuda)', 'var(--c-free)'];
+  const dotColors = hasMoESplit
+    ? ['var(--c-weights)', 'var(--c-other-weights)', 'var(--c-kvcache)', 'var(--c-activations)', 'var(--c-cuda)', 'var(--c-free)']
+    : ['var(--c-weights)', 'var(--c-kvcache)', 'var(--c-activations)', 'var(--c-cuda)', 'var(--c-free)'];
   const legItems = [
     ...segs.map((s, i) => ({ label: s.label, gb: s.gb, color: dotColors[i] })),
     { label: 'Free', gb: v.freeGB > 0 ? v.freeGB : 0, color: 'var(--c-free)', border: '1px solid var(--border2)' },
@@ -452,16 +511,29 @@ function buildVRAMHTML(v) {
 }
 
 function buildBreakdownHTML(tp, model) {
-  const isMoE = model.activeParams && model.params && model.activeParams < model.params;
-  const rows = [
-    ...(isMoE ? [
-      ['Total Params', model.params.toFixed(2) + ' B'],
-      ['Active Params', model.activeParams.toFixed(2) + ' B  ← MoE: drives BW & FLOPs'],
-    ] : []),
+  const isMoEStructured = model.nExperts && model.nActive && model.moeIntermediateSize;
+  const isMoELegacy = !isMoEStructured && model.activeParams && model.params && model.activeParams < model.params;
+  const isMixedPrec = state.expertPrecision !== state.otherPrecision;
+
+  const rows = [];
+  if (isMoEStructured) {
+    rows.push(['Total Params', model.params.toFixed(2) + ' B']);
+    rows.push(['Experts (total/active)', model.nExperts + ' / ' + model.nActive + ' per token']);
+    rows.push(['Expert precision', state.expertPrecision.toUpperCase() + '  ← quantized FFN/expert weights']);
+    rows.push(['Other precision', state.otherPrecision.toUpperCase() + '  ← attn + embed weights']);
+  } else if (isMoELegacy) {
+    rows.push(['Total Params', model.params.toFixed(2) + ' B']);
+    rows.push(['Active Params', model.activeParams.toFixed(2) + ' B  ← MoE: drives BW & FLOPs']);
+    if (isMixedPrec) {
+      rows.push(['Expert precision', state.expertPrecision.toUpperCase()]);
+      rows.push(['Other precision', state.otherPrecision.toUpperCase()]);
+    }
+  }
+  rows.push(
     ['Mem Bandwidth', (tp.bwGBs / 1000).toFixed(2) + ' TB/s'],
     ['Ridge Point', tp.ridgePoint.toFixed(0) + ' ops/byte'],
     ['Arith. Intensity', tp.arithIntensity.toFixed(0) + ' ops/byte'],
-  ];
+  );
 
   const rowsHTML = rows.map(([l, v]) => `
     <div class="brow">
@@ -603,6 +675,8 @@ function serializeState() {
   if (gpuVal) p.set('g', gpuVal);
   if (state.gpuCount !== 1) p.set('n', state.gpuCount);
   if (state.precision !== 'bf16') p.set('p', state.precision);
+  if (state.expertPrecision !== 'bf16') p.set('ep', state.expertPrecision);
+  if (state.otherPrecision !== 'bf16') p.set('op', state.otherPrecision);
 
   const cost = document.getElementById('gpuCostPerHr').value;
   if (cost) p.set('cost', cost);
@@ -611,6 +685,7 @@ function serializeState() {
     ['mp', 'mParams'], ['ml', 'mLayers'], ['mh', 'mHidden'], ['mf', 'mFFN'],
     ['ma', 'mHeads'], ['mk', 'mKVHeads'], ['mc', 'mContext'], ['mv', 'mVocab'],
     ['map', 'mActiveParams'], ['bb', 'bBatch'], ['bs', 'bOutput'],
+    ['nx', 'mNExperts'], ['na', 'mNActive'], ['mff', 'mMoeFFN'],
   ];
   for (const [key, id] of fields) {
     const v = document.getElementById(id).value;
@@ -641,6 +716,12 @@ function deserializeState() {
   const prec = p.get('p');
   if (prec) state.precision = prec;
 
+  // Pre-load expertPrecision and otherPrecision into state before onGpuChange
+  const ep = p.get('ep');
+  if (ep) state.expertPrecision = ep;
+  const op = p.get('op');
+  if (op) state.otherPrecision = op;
+
   const cost = p.get('cost');
   if (cost) document.getElementById('gpuCostPerHr').value = cost;
 
@@ -648,6 +729,7 @@ function deserializeState() {
     ['mp', 'mParams'], ['ml', 'mLayers'], ['mh', 'mHidden'], ['mf', 'mFFN'],
     ['ma', 'mHeads'], ['mk', 'mKVHeads'], ['mc', 'mContext'], ['mv', 'mVocab'],
     ['map', 'mActiveParams'], ['bb', 'bBatch'], ['bs', 'bOutput'],
+    ['nx', 'mNExperts'], ['na', 'mNActive'], ['mff', 'mMoeFFN'],
   ];
   for (const [key, id] of fields) {
     const v = p.get(key);
@@ -662,6 +744,8 @@ function deserializeState() {
 
   // Re-apply precision after onGpuChange (it may have fallen back to a supported default)
   if (prec) setPrecision(prec);
+  if (ep) setExpertPrecision(ep);
+  if (op) setOtherPrecision(op);
 }
 
 function copyShareLink() {

@@ -234,6 +234,9 @@ async function fetchHFConfig() {
       kvHeads: cfg.num_key_value_heads ?? cfg.num_attention_heads ?? cfg.n_head ?? null,
       context: cfg.max_position_embeddings ?? cfg.n_positions ?? cfg.max_seq_len ?? null,
       vocab: cfg.vocab_size ?? null,
+      nExperts: cfg.n_routed_experts ?? cfg.num_experts ?? cfg.num_local_experts ?? null,
+      nActive: cfg.num_experts_per_tok ?? cfg.n_activated_experts ?? cfg.experts_per_token ?? null,
+      moeIntermediateSize: cfg.moe_intermediate_size ?? null,
     };
 
     // --- FALLBACK TIER 2: Network parsing for missing physical specs ---
@@ -277,7 +280,17 @@ async function fetchHFConfig() {
     }
 
     if (precisionFromConfig) {
-      setPrecision(precisionFromConfig);
+      // modules_to_not_convert lists modules kept in full precision (typically BF16).
+      // If it's non-empty on a MoE model, use mixed-precision: expert weights at
+      // quantized precision, attention + embed at BF16.
+      const notConverted = qConfig?.modules_to_not_convert ?? [];
+      const isMoEModel = mappings.nExperts !== null;
+      if (isMoEModel && notConverted.length > 0) {
+        setExpertPrecision(precisionFromConfig);
+        setOtherPrecision('bf16');
+      } else {
+        setPrecision(precisionFromConfig);
+      }
     } else {
       const dtype = cfg.torch_dtype ?? cfg.dtype;
       if (dtype) {
@@ -302,13 +315,12 @@ async function fetchHFConfig() {
     setFieldVal('bOutput', 256);
     setFieldVal('mVocab', mappings.vocab);
 
-    // Active params — only fill for MoE models
-    const activeP = inferActiveParams(cfg);
-    if (activeP !== null) {
-      setFieldVal('mActiveParams', activeP.toFixed(2));
-    } else {
-      document.getElementById('mActiveParams').value = '';
-    }
+    // MoE expert structure — populate new first-class fields
+    setFieldVal('mNExperts', mappings.nExperts);
+    setFieldVal('mNActive',  mappings.nActive);
+    setFieldVal('mMoeFFN',   mappings.moeIntermediateSize);
+    // Clear legacy activeParams field (new fields supersede it)
+    document.getElementById('mActiveParams').value = '';
 
     statusEl.className = 'fetch-status ok';
     statusEl.innerHTML = typeof finalStatusHtml !== 'undefined' ? finalStatusHtml : `✓ Loaded ${cfg.model_type ?? modelId}`;

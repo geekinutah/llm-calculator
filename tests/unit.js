@@ -34,6 +34,11 @@ const MODEL_FULL = {
 // don't need KV-cache geometry.
 const MODEL_PARAMS  = { params: 7 };
 const MODEL_MOE     = { params: 235, activeParams: 22 };
+const MODEL_MOE_SPLIT = {
+  params: 671, layers: 94, hidden: 7168,
+  heads: 128, kvHeads: 8, vocab: 201088,
+  nExperts: 128, nActive: 4, moeIntermediateSize: 2048,
+};
 const MODEL_DENSE22 = { params: 22 };
 
 const A100P = GPU_DB.a100_pcie;   // 80 GB, 1935 GB/s, bf16=312, int8=624
@@ -418,4 +423,40 @@ test('inferActiveParams — experts_per_token alias resolves correctly', () => {
     }),
     5_935_841_280 / 1e9,
   );
+});
+
+// ═══════════════════════════════════════════════════════════
+//  Mixed-precision MoE (Phase 1A)
+// ═══════════════════════════════════════════════════════════
+
+test('calcVRAM — MoE mixed precision: INT4 expert + BF16 other < uniform BF16', () => {
+  const bf16only = calcVRAM(MODEL_MOE_SPLIT, A100P, 'bf16', 1, 1, 4096);
+  const mixed    = calcVRAM(MODEL_MOE_SPLIT, A100P, 'bf16', 1, 1, 4096, 'int4', 'bf16');
+  assert.ok(mixed.weightsGB < bf16only.weightsGB);
+});
+
+test('calcVRAM — MoE mixed precision: returns non-null expertWeightsGB and otherWeightsGB', () => {
+  const r = calcVRAM(MODEL_MOE_SPLIT, A100P, 'bf16', 1, 1, 4096, 'int4', 'bf16');
+  assert.ok(r.expertWeightsGB !== null);
+  assert.ok(r.otherWeightsGB  !== null);
+  assert.ok(r.expertWeightsGB > 0);
+  assert.ok(r.otherWeightsGB  > 0);
+});
+
+test('calcThroughput — MoE mixed precision: INT4/BF16 split has higher TPS than uniform BF16', () => {
+  const bf16only = calcThroughput(MODEL_MOE_SPLIT, A100P, 'bf16', 1, 1);
+  const mixed    = calcThroughput(MODEL_MOE_SPLIT, A100P, 'bf16', 1, 1, 'int4', 'bf16');
+  assert.ok(mixed.tps > bf16only.tps);
+});
+
+test('calcThroughput — dense model: single precision = two identical precisions (no regression)', () => {
+  const single = calcThroughput(MODEL_FULL, A100P, 'bf16', 1, 1);
+  const double = calcThroughput(MODEL_FULL, A100P, 'bf16', 1, 1, 'bf16', 'bf16');
+  assert.strictEqual(single.tps, double.tps);
+});
+
+test('calcMaxBatch — MoE mixed precision: INT4 expert weights allow larger batch than BF16', () => {
+  const bf16only = calcMaxBatch(MODEL_MOE_SPLIT, A100P, 'bf16', 1, 256);
+  const mixed    = calcMaxBatch(MODEL_MOE_SPLIT, A100P, 'bf16', 1, 256, 'int4', 'bf16');
+  assert.ok(mixed >= bf16only);
 });

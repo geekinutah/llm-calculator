@@ -146,11 +146,27 @@
                 data-tip="Number of tokens in the vocabulary.&#10;&#10;Drives the embedding table: 2 × vocab × hidden × bytes (input embedding + output projection, when weights are not tied).&#10;&#10;Usually a minor contributor to total VRAM for large models."></i></label>
             <input type="number" id="mVocab" placeholder="32000" min="1000" oninput="recalculate()">
           </div>
-          <div class="input-group" style="grid-column:1/-1">
+          <div class="input-group" style="grid-column:1/-1;display:none">
             <label>Active Params (B)<i class="tip"
                 data-tip="MoE only: parameters actually computed per token.&#10;&#10;In dense models, Active = Total. In MoE models (e.g. Qwen3-235B-A22B, DeepSeek-V3), only a subset of experts fire per token — Active Params drives memory bandwidth and FLOPs per token, while Total Params drives VRAM.&#10;&#10;Auto-filled by Fetch for MoE models. Leave blank for dense models."></i></label>
             <input type="number" id="mActiveParams" placeholder="leave blank for dense" min="0.1" step="0.1"
               oninput="recalculate()">
+          </div>
+          <!-- MoE expert structure -->
+          <div class="input-group">
+            <label>Experts (total)<i class="tip"
+                data-tip="MoE only: total number of expert FFN sub-layers in the model.&#10;&#10;Only a subset (Experts active/tok) fires per token. Total experts × expert FFN dim drives total VRAM, while active experts drive compute and bandwidth."></i></label>
+            <input type="number" id="mNExperts" placeholder="e.g. 128" min="1" oninput="recalculate()">
+          </div>
+          <div class="input-group">
+            <label>Experts (active/tok)<i class="tip"
+                data-tip="MoE only: number of experts activated per token (top-k routing).&#10;&#10;This × expert FFN dim determines the active parameter count that drives memory bandwidth and FLOPs per token."></i></label>
+            <input type="number" id="mNActive" placeholder="e.g. 4" min="1" oninput="recalculate()">
+          </div>
+          <div class="input-group" style="grid-column:1/-1">
+            <label>Expert FFN dim<i class="tip"
+                data-tip="MoE only: intermediate size of each individual expert's FFN sub-layer.&#10;&#10;Typically much smaller than the dense FFN dim. Active experts × this size determines per-token compute cost."></i></label>
+            <input type="number" id="mMoeFFN" placeholder="e.g. 2048" min="1" oninput="recalculate()">
           </div>
         </div>
       </div>
@@ -159,7 +175,7 @@
       <div>
         <div class="section-label">Precision</div>
         <div class="input-group">
-          <label>Weight / Compute Dtype</label>
+          <label>Expert precision</label>
           <div class="precision-group" id="precisionGroup">
             <div class="pill" data-prec="fp32" onclick="setPrecision('fp32')">FP32</div>
             <div class="pill active" data-prec="bf16" onclick="setPrecision('bf16')">BF16</div>
@@ -170,6 +186,18 @@
             <div class="pill" data-prec="fp4" onclick="setPrecision('fp4')">FP4</div>
           </div>
           <div class="fetch-status" id="precNote" style="margin-top:0.4rem"></div>
+        </div>
+        <div class="input-group" style="margin-top:0.5rem;opacity:0.8">
+          <label style="font-size:0.75rem">Other precision <span style="color:var(--text-dim);font-weight:400">(attn + embed — usually BF16)</span></label>
+          <div class="precision-group" id="otherPrecisionGroup">
+            <div class="pill" data-prec-other="fp32" onclick="setOtherPrecision('fp32')">FP32</div>
+            <div class="pill active" data-prec-other="bf16" onclick="setOtherPrecision('bf16')">BF16</div>
+            <div class="pill" data-prec-other="fp16" onclick="setOtherPrecision('fp16')">FP16</div>
+            <div class="pill" data-prec-other="fp8" onclick="setOtherPrecision('fp8')">FP8</div>
+            <div class="pill" data-prec-other="int8" onclick="setOtherPrecision('int8')">INT8</div>
+            <div class="pill" data-prec-other="int4" onclick="setOtherPrecision('int4')">INT4</div>
+            <div class="pill" data-prec-other="fp4" onclick="setOtherPrecision('fp4')">FP4</div>
+          </div>
         </div>
       </div>
 

@@ -69,13 +69,45 @@ function inferActiveParams(cfg) {
   return (emb + moeLayers * (attn + activeFFNPerMoeLayer) + denseLayers * (attn + ffnPerDenseLayer)) / 1e9;
 }
 
-function calcVRAM(model, gpu, precision, gpuCount, batch, seqLen) {
-  const bytesPerParam = PREC_META[precision]?.bytes ?? 2;
+function splitMoEParams(model) {
+  if (
+    model.nExperts != null && model.nActive != null &&
+    model.moeIntermediateSize != null &&
+    model.layers != null && model.hidden != null
+  ) {
+    const expertParamsB = model.nExperts * model.layers * 3 * model.hidden * model.moeIntermediateSize / 1e9;
+    const activeExpertParamsB = (model.nActive / model.nExperts) * expertParamsB;
+    const nonExpertParamsB = (model.params ?? 0) - expertParamsB;
+    const otherParamsB = nonExpertParamsB;
+    return { expertParamsB, activeExpertParamsB, nonExpertParamsB, otherParamsB };
+  } else if (model.activeParams != null) {
+    return { expertParamsB: null, activeExpertParamsB: model.activeParams, nonExpertParamsB: null, otherParamsB: null };
+  } else {
+    return { expertParamsB: null, activeExpertParamsB: null, nonExpertParamsB: null, otherParamsB: null };
+  }
+}
+
+function calcVRAM(model, gpu, precision, gpuCount, batch, seqLen, expertPrecision = precision, otherPrecision = precision) {
+  const expertBytes = PREC_META[expertPrecision]?.bytes ?? 2;
+  const otherBytes  = PREC_META[otherPrecision]?.bytes  ?? 2;
+  const bytesPerParam = PREC_META[precision]?.bytes ?? 2; // kept for KV cache calc
   const totalVram = (gpu?.vram ?? 80) * gpuCount;
 
   // 1. Weights
   const paramsB = model.params ?? estimateParams(model);
-  const weightsGB = paramsB ? (paramsB * 1e9 * bytesPerParam) / 1e9 : null;
+  const { expertParamsB, otherParamsB } = splitMoEParams(model);
+
+  let weightsGB, expertWeightsGB = null, otherWeightsGB = null;
+  if (expertParamsB !== null && otherParamsB !== null) {
+    expertWeightsGB = (expertParamsB * 1e9 * expertBytes) / 1e9;
+    otherWeightsGB  = (otherParamsB  * 1e9 * otherBytes)  / 1e9;
+    weightsGB = expertWeightsGB + otherWeightsGB;
+  } else if (paramsB) {
+    // Legacy / dense path: single precision
+    weightsGB = (paramsB * 1e9 * expertBytes) / 1e9;
+  } else {
+    weightsGB = null;
+  }
 
   // 2. KV Cache
   // Per token: 2 (K+V) * layers * kvHeads * (hidden/heads) * kvBytes
@@ -104,10 +136,10 @@ function calcVRAM(model, gpu, precision, gpuCount, batch, seqLen) {
   const freeGB = Math.max(0, totalVram - used);
   const overflow = Math.max(0, used - totalVram);
 
-  return { weightsGB, kvGB, actGB, cudaGB, freeGB, totalVram, used, overflow };
+  return { weightsGB, expertWeightsGB, otherWeightsGB, kvGB, actGB, cudaGB, freeGB, totalVram, used, overflow };
 }
 
-function calcThroughput(model, gpu, precision, gpuCount, batch) {
+function calcThroughput(model, gpu, precision, gpuCount, batch, expertPrecision = precision, otherPrecision = precision) {
   if (!gpu) return null;
   const prec = precision;
 
@@ -122,11 +154,30 @@ function calcThroughput(model, gpu, precision, gpuCount, batch) {
   const totalParamsB = model.params ?? estimateParams(model);
   if (!totalParamsB) return null;
 
-  // For MoE: active params drive BW and FLOPs per token; total params size VRAM
-  const paramsB = model.activeParams ?? totalParamsB;
+  const expertBytes = PREC_META[expertPrecision]?.bytes ?? 2;
+  const otherBytes  = PREC_META[otherPrecision]?.bytes  ?? 2;
+  const { activeExpertParamsB, nonExpertParamsB } = splitMoEParams(model);
+
+  let modelBytes;
+  let effectiveBytesPerParam; // used for ridgeBatch calc at end
+  if (activeExpertParamsB !== null && nonExpertParamsB !== null) {
+    // Full mixed-precision: active expert weights + always-on non-expert weights
+    modelBytes = activeExpertParamsB * 1e9 * expertBytes + nonExpertParamsB * 1e9 * otherBytes;
+    effectiveBytesPerParam = modelBytes / (totalParamsB * 1e9);
+  } else if (activeExpertParamsB !== null) {
+    // Legacy activeParams path: just activeParams at expertPrecision
+    modelBytes = activeExpertParamsB * 1e9 * expertBytes;
+    effectiveBytesPerParam = expertBytes;
+  } else {
+    // Dense / single precision
+    modelBytes = totalParamsB * 1e9 * expertBytes;
+    effectiveBytesPerParam = expertBytes;
+  }
+
+  // For MoE: active params drive FLOPs per token
+  const paramsB = activeExpertParamsB ?? (model.activeParams ?? totalParamsB);
 
   const bytesPerParam = PREC_META[prec]?.bytes ?? 2;
-  const modelBytes = paramsB * 1e9 * bytesPerParam;
 
   // Arithmetic intensity threshold (ops/byte) = TFLOPS / BW
   const ridgePoint = (tflops * 1e12) / (bwGBs * 1e9); // ops/byte
@@ -164,7 +215,7 @@ function calcThroughput(model, gpu, precision, gpuCount, batch) {
   const peakFlops = tflops * 1e12;
   const flopsUtil = Math.min(100, (actualFlopsUsed / peakFlops) * 100);
 
-  const ridgeBatch = Math.max(1, Math.ceil(ridgePoint * bytesPerParam / 2));
+  const ridgeBatch = Math.max(1, Math.ceil(ridgePoint * effectiveBytesPerParam / 2));
 
   return {
     tps: Math.round(tps),
@@ -182,13 +233,23 @@ function calcThroughput(model, gpu, precision, gpuCount, batch) {
   };
 }
 
-function calcMaxBatch(model, gpu, precision, gpuCount, seqLen) {
-  const bytesPerParam = PREC_META[precision]?.bytes ?? 2;
+function calcMaxBatch(model, gpu, precision, gpuCount, seqLen, expertPrecision = precision, otherPrecision = precision) {
+  const expertBytes = PREC_META[expertPrecision]?.bytes ?? 2;
+  const otherBytes  = PREC_META[otherPrecision]?.bytes  ?? 2;
+  const bytesPerParam = PREC_META[precision]?.bytes ?? 2; // for KV
   const totalVram = (gpu?.vram ?? 80) * gpuCount;
   const paramsB = model.params ?? estimateParams(model);
   if (!paramsB) return 1;
 
-  const weightsGB = (paramsB * 1e9 * bytesPerParam) / 1e9;
+  const { expertParamsB, otherParamsB } = splitMoEParams(model);
+
+  let weightsGB;
+  if (expertParamsB !== null && otherParamsB !== null) {
+    weightsGB = (expertParamsB * 1e9 * expertBytes + otherParamsB * 1e9 * otherBytes) / 1e9;
+  } else {
+    weightsGB = (paramsB * 1e9 * expertBytes) / 1e9;
+  }
+
   const freeGB = totalVram - weightsGB - 1.0; // minus CUDA overhead
   if (freeGB <= 0) return 1;
 
