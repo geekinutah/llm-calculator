@@ -158,12 +158,16 @@ function calcThroughput(model, gpu, precision, gpuCount, batch, expertPrecision 
   const otherBytes  = PREC_META[otherPrecision]?.bytes  ?? 2;
   const { activeExpertParamsB, nonExpertParamsB } = splitMoEParams(model);
 
+  // For MoE: active params drive FLOPs per token (must come before effectiveBytesPerParam)
+  const paramsB = activeExpertParamsB ?? (model.activeParams ?? totalParamsB);
+
   let modelBytes;
   let effectiveBytesPerParam; // used for ridgeBatch calc at end
   if (activeExpertParamsB !== null && nonExpertParamsB !== null) {
     // Full mixed-precision: active expert weights + always-on non-expert weights
     modelBytes = activeExpertParamsB * 1e9 * expertBytes + nonExpertParamsB * 1e9 * otherBytes;
-    effectiveBytesPerParam = modelBytes / (totalParamsB * 1e9);
+    // ridgeBatch uses paramsB (active FLOPs params), not totalParamsB
+    effectiveBytesPerParam = modelBytes / (paramsB * 1e9);
   } else if (activeExpertParamsB !== null) {
     // Legacy activeParams path: just activeParams at expertPrecision
     modelBytes = activeExpertParamsB * 1e9 * expertBytes;
@@ -173,9 +177,6 @@ function calcThroughput(model, gpu, precision, gpuCount, batch, expertPrecision 
     modelBytes = totalParamsB * 1e9 * expertBytes;
     effectiveBytesPerParam = expertBytes;
   }
-
-  // For MoE: active params drive FLOPs per token
-  const paramsB = activeExpertParamsB ?? (model.activeParams ?? totalParamsB);
 
   const bytesPerParam = PREC_META[prec]?.bytes ?? 2;
 

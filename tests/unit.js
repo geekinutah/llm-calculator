@@ -460,3 +460,20 @@ test('calcMaxBatch — MoE mixed precision: INT4 expert weights allow larger bat
   const mixed    = calcMaxBatch(MODEL_MOE_SPLIT, A100P, 'bf16', 1, 256, 'int4', 'bf16');
   assert.ok(mixed >= bf16only);
 });
+
+test('calcThroughput — MoE mixed precision: ridgeBatch uses active FLOPs params not total params', () => {
+  // gpt-oss-120b style: 128 experts, 4 active, 36 layers, hidden=2880, moeFFN=2880
+  // expertParamsB = 128 × 36 × 3 × 2880 × 2880 / 1e9 ≈ 114.66B
+  // activeExpertParamsB = (4/128) × 114.66 ≈ 3.58B
+  // nonExpertParamsB = 117.01 - 114.66 ≈ 2.35B
+  // modelBytes = 3.58B × 0.5 + 2.35B × 2 = 6.49 GB
+  // ridgeBatch should use paramsB=3.58B (not totalParamsB=117B) →
+  //   ridgeBatch = ceil(ridgePoint × 6.49/3.58 / 2)  >> 12
+  const GPT_OSS = {
+    params: 117.01, layers: 36, hidden: 2880, heads: 64, kvHeads: 8,
+    vocab: 201088, nExperts: 128, nActive: 4, moeIntermediateSize: 2880,
+  };
+  const tp = calcThroughput(GPT_OSS, A100P, 'bf16', 1, 1, 'int4', 'bf16');
+  // ridgeBatch must be much larger than the wrong value of 12
+  assert.ok(tp.ridgeBatch > 100, `ridgeBatch=${tp.ridgeBatch} should be >>12 for MoE mixed-precision`);
+});
