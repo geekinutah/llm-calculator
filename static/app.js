@@ -160,7 +160,7 @@ function readModel() {
 function readBatch() {
   return {
     batch: +document.getElementById('bBatch').value || 32,
-    output: +document.getElementById('bOutput').value || 2048,
+    output: +document.getElementById('bOutput').value || 256,
   };
 }
 
