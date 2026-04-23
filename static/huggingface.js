@@ -226,6 +226,7 @@ async function fetchHFConfig() {
     const cfg = { ...rawCfg, ...subCfg };
 
     // Map common HF config keys → our fields
+    const nExpertsRaw = cfg.n_routed_experts ?? cfg.num_experts ?? cfg.num_local_experts ?? null;
     const mappings = {
       layers: cfg.num_hidden_layers ?? cfg.n_layer ?? cfg.num_layers ?? null,
       hidden: cfg.hidden_size ?? cfg.d_model ?? cfg.n_embd ?? null,
@@ -234,9 +235,10 @@ async function fetchHFConfig() {
       kvHeads: cfg.num_key_value_heads ?? cfg.num_attention_heads ?? cfg.n_head ?? null,
       context: cfg.max_position_embeddings ?? cfg.n_positions ?? cfg.max_seq_len ?? null,
       vocab: cfg.vocab_size ?? null,
-      nExperts: cfg.n_routed_experts ?? cfg.num_experts ?? cfg.num_local_experts ?? null,
+      nExperts: nExpertsRaw,
       nActive: cfg.num_experts_per_tok ?? cfg.n_activated_experts ?? cfg.experts_per_token ?? null,
-      moeIntermediateSize: cfg.moe_intermediate_size ?? null,
+      // gpt_oss style: expert FFN stored in intermediate_size, not moe_intermediate_size
+      moeIntermediateSize: cfg.moe_intermediate_size ?? (nExpertsRaw ? cfg.intermediate_size : null) ?? null,
     };
 
     // --- FALLBACK TIER 2: Network parsing for missing physical specs ---

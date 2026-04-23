@@ -105,8 +105,16 @@ function setPrecision(p) {
 }
 
 function setExpertPrecision(p) {
+  // If this GPU doesn't support p, map to nearest same-width alternative.
+  // fp4/mxfp4 → int4: same 0.5 bytes/param, identical bandwidth model.
+  const gpu = state.gpu;
+  if (gpu && getTFLOPS(gpu, p) === null) {
+    const sameWidth = { fp4: 'int4' };
+    const candidates = [sameWidth[p], 'int4', 'int8', 'bf16'].filter(Boolean);
+    p = candidates.find(c => getTFLOPS(gpu, c) !== null) ?? p;
+  }
   const pill = document.querySelector(`[data-prec="${p}"]`);
-  if (!pill || pill.classList.contains('disabled')) return;
+  if (!pill) return;
   state.expertPrecision = p;
   state.precision = p; // keep legacy field in sync for single-precision models
   document.querySelectorAll('[data-prec]').forEach(el => el.classList.remove('active'));
@@ -141,10 +149,10 @@ function updatePrecisionPills() {
     pill.classList.toggle('disabled', !supported);
   });
 
-  // If expert precision became unsupported, fall back
-  if (gpu && getTFLOPS(gpu, state.precision) === null) {
-    const fallback = ['bf16', 'fp16', 'int8', 'fp32'].find(p => getTFLOPS(gpu, p) !== null) || 'bf16';
-    setPrecision(fallback);
+  // If expert precision became unsupported, re-apply via setExpertPrecision
+  // which already handles the same-width fallback (fp4 → int4, etc.)
+  if (gpu && getTFLOPS(gpu, state.expertPrecision) === null) {
+    setExpertPrecision(state.expertPrecision);
   }
 
   // If other precision became unsupported, fall back to bf16
