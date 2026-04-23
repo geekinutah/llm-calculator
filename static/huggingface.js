@@ -264,13 +264,30 @@ async function fetchHFConfig() {
     // Compute params safely with potential fallbacks loaded
     mappings.params = inferParams(cfg, mappings.vocab);
 
-    // Infer precision from torch_dtype
-    const dtype = cfg.torch_dtype ?? cfg.dtype;
-    if (dtype) {
-      const dtypeMap = { float32: 'fp32', float16: 'fp16', bfloat16: 'bf16' };
-      const mapped = dtypeMap[dtype];
-      if (mapped) {
-        setPrecision(mapped);
+    // Infer precision — quantization_config takes priority over torch_dtype
+    let precisionFromConfig = null;
+    const qConfig = cfg.quantization_config;
+    if (qConfig) {
+      const bits = qConfig.bits ?? qConfig.w_bit ?? qConfig.num_bits;
+      const quantType = (qConfig.quant_type ?? qConfig.quant_method ?? '').toLowerCase();
+      if (qConfig.load_in_4bit || bits === 4) precisionFromConfig = 'int4';
+      else if (qConfig.load_in_8bit || bits === 8) precisionFromConfig = 'int8';
+      else if (quantType.includes('fp8')) precisionFromConfig = 'fp8';
+      else if (quantType.includes('fp4')) precisionFromConfig = 'fp4';
+    }
+
+    if (precisionFromConfig) {
+      setPrecision(precisionFromConfig);
+    } else {
+      const dtype = cfg.torch_dtype ?? cfg.dtype;
+      if (dtype) {
+        const dtypeMap = {
+          float32: 'fp32', float16: 'fp16', bfloat16: 'bf16',
+          int8: 'int8', int4: 'int4',
+          float8_e4m3fn: 'fp8', float8_e5m2: 'fp8',
+        };
+        const mapped = dtypeMap[dtype];
+        if (mapped) setPrecision(mapped);
       }
     }
 
