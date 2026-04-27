@@ -135,6 +135,23 @@ const GPU_DB = {
     fp4: null,
     interconnect: { nvlink_gbps: 900, pcie_gen: 5 },
   },
+  h100_pcie: {
+    name: 'H100 PCIe',
+    arch: 'hopper',
+    archOrder: 20,
+    category: 'datacenter',
+    memType: 'HBM2e',
+    vram: 80,
+    bw: 2000,
+    fp32: 51,
+    bf16: 989,
+    fp16: 989,
+    fp8: 1979,
+    int8: 1979,
+    int4: 1979,    // software dequant, no hardware gain over int8
+    fp4: null,
+    interconnect: { nvlink_gbps: null, pcie_gen: 5 },
+  },
   // ── Ada Lovelace ───────────────────────────────────────────
   rtx_6000_ada: {
     name: 'RTX 6000 Ada',
