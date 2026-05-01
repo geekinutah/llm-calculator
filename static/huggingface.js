@@ -233,6 +233,7 @@ async function fetchHFConfig() {
       ffn: cfg.intermediate_size ?? cfg.ffn_dim ?? cfg.inner_dim ?? null,
       heads: cfg.num_attention_heads ?? cfg.n_head ?? null,
       kvHeads: cfg.num_key_value_heads ?? cfg.num_attention_heads ?? cfg.n_head ?? null,
+      headDim: cfg.head_dim ?? null,
       context: cfg.max_position_embeddings ?? cfg.n_positions ?? cfg.max_seq_len ?? null,
       vocab: cfg.vocab_size ?? null,
       nExperts: nExpertsRaw,
@@ -313,6 +314,7 @@ async function fetchHFConfig() {
     setFieldVal('mFFN', mappings.ffn);
     setFieldVal('mHeads', mappings.heads);
     setFieldVal('mKVHeads', mappings.kvHeads);
+    setFieldVal('mHeadDim', mappings.headDim);
     setFieldVal('mContext', mappings.context);
     setFieldVal('bOutput', 256);
     setFieldVal('mVocab', mappings.vocab);

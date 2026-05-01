@@ -204,6 +204,7 @@ function readModel() {
     ffn:                 +document.getElementById('mFFN').value         || null,
     heads:               +document.getElementById('mHeads').value       || null,
     kvHeads:             +document.getElementById('mKVHeads').value     || null,
+    headDim:             +document.getElementById('mHeadDim').value     || null,
     context:             +document.getElementById('mContext').value     || null,
     vocab:               +document.getElementById('mVocab').value       || null,
     nExperts:            +document.getElementById('mNExperts').value    || null,
@@ -691,7 +692,7 @@ function serializeState() {
 
   const fields = [
     ['mp', 'mParams'], ['ml', 'mLayers'], ['mh', 'mHidden'], ['mf', 'mFFN'],
-    ['ma', 'mHeads'], ['mk', 'mKVHeads'], ['mc', 'mContext'], ['mv', 'mVocab'],
+    ['ma', 'mHeads'], ['mk', 'mKVHeads'], ['mhd', 'mHeadDim'], ['mc', 'mContext'], ['mv', 'mVocab'],
     ['map', 'mActiveParams'], ['bb', 'bBatch'], ['bs', 'bOutput'],
     ['nx', 'mNExperts'], ['na', 'mNActive'], ['mff', 'mMoeFFN'],
   ];
@@ -735,7 +736,7 @@ function deserializeState() {
 
   const fields = [
     ['mp', 'mParams'], ['ml', 'mLayers'], ['mh', 'mHidden'], ['mf', 'mFFN'],
-    ['ma', 'mHeads'], ['mk', 'mKVHeads'], ['mc', 'mContext'], ['mv', 'mVocab'],
+    ['ma', 'mHeads'], ['mk', 'mKVHeads'], ['mhd', 'mHeadDim'], ['mc', 'mContext'], ['mv', 'mVocab'],
     ['map', 'mActiveParams'], ['bb', 'bBatch'], ['bs', 'bOutput'],
     ['nx', 'mNExperts'], ['na', 'mNActive'], ['mff', 'mMoeFFN'],
   ];

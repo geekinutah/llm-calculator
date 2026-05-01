@@ -465,6 +465,23 @@ test('calcVRAM — KV cache uses otherPrecision (BF16) not expertPrecision (INT4
   assert.strictEqual(mixed.kvGB, int4uniform.kvGB * 2);
 });
 
+test('calcVRAM — explicit headDim overrides hidden÷heads (Qwen3 MoE pattern)', () => {
+  // Qwen3-30B-A3B: hidden=2048, heads=32 → hidden/heads=64, but actual head_dim=128
+  // Without headDim field the KV cache is 2× too small.
+  const implicit = calcVRAM(
+    { params: 30, layers: 48, hidden: 2048, heads: 32, kvHeads: 4 },
+    A100P, 'bf16', 1, 1, 4096
+  );
+  const explicit = calcVRAM(
+    { params: 30, layers: 48, hidden: 2048, heads: 32, kvHeads: 4, headDim: 128 },
+    A100P, 'bf16', 1, 1, 4096
+  );
+  // implicit: headDim=64 → kvPerToken = 2×48×4×64×2 = 49,152
+  // explicit: headDim=128 → kvPerToken = 2×48×4×128×2 = 98,304
+  assert.strictEqual(explicit.kvGB, implicit.kvGB * 2,
+    `explicit headDim=128 should give 2× the KV cache of derived headDim=64`);
+});
+
 test('calcMaxBatch — MoE mixed precision: INT4 expert weights allow larger batch than BF16', () => {
   const bf16only = calcMaxBatch(MODEL_MOE_SPLIT, A100P, 'bf16', 1, 256);
   const mixed    = calcMaxBatch(MODEL_MOE_SPLIT, A100P, 'bf16', 1, 256, 'int4', 'bf16');

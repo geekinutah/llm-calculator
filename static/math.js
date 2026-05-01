@@ -109,14 +109,16 @@ function calcVRAM(model, gpu, precision, gpuCount, batch, seqLen, expertPrecisio
   }
 
   // 2. KV Cache
-  // Per token: 2 (K+V) * layers * kvHeads * (hidden/heads) * kvBytes
+  // Per token: 2 (K+V) * layers * kvHeads * head_dim * kvBytes
+  // head_dim may be set explicitly (e.g. Qwen3: hidden=2048, heads=32, head_dim=128 ≠ 64).
+  // Fall back to hidden/heads when not provided.
   // KV is produced by attention layers, which run at otherPrecision (typically BF16),
   // not at the quantized expert precision. Floor at 1 byte (no sub-byte KV in practice).
   const kvBytes = Math.max(1, otherBytes);
   let kvGB = null;
   const kvSeq = seqLen || model.context;
   if (model.layers && model.kvHeads && model.hidden && model.heads && kvSeq) {
-    const headDim = model.hidden / model.heads;
+    const headDim = model.headDim || (model.hidden / model.heads);
     const kvPerToken = 2 * model.layers * model.kvHeads * headDim * kvBytes;
     kvGB = (kvPerToken * kvSeq * batch) / 1e9;
   }
@@ -256,7 +258,7 @@ function calcMaxBatch(model, gpu, precision, gpuCount, seqLen, expertPrecision =
   const kvBytes = Math.max(1, otherBytes); // KV lives in attention layers → otherPrecision
   let perReqGB = 0;
   if (model.layers && model.kvHeads && model.hidden && model.heads && seqLen) {
-    const headDim = model.hidden / model.heads;
+    const headDim = model.headDim || (model.hidden / model.heads);
     perReqGB += (2 * model.layers * model.kvHeads * headDim * kvBytes * seqLen) / 1e9;
   }
   if (model.hidden && seqLen) {

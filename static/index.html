@@ -118,7 +118,7 @@
           </div>
           <div class="input-group">
             <label>Hidden Dim<i class="tip"
-                data-tip="Width of the model's residual stream (H).&#10;&#10;Attention FLOPs scale as O(H²) per layer. Sets KV head dimension: head_dim = H ÷ attn_heads.&#10;&#10;Also called d_model or embedding dimension."></i></label>
+                data-tip="Width of the model's residual stream (H).&#10;&#10;Attention FLOPs scale as O(H²) per layer. Used to derive Head Dim when not set explicitly (head_dim = H ÷ attn_heads). Some models (e.g. Qwen3) set head_dim independently.&#10;&#10;Also called d_model or embedding dimension."></i></label>
             <input type="number" id="mHidden" placeholder="4096" min="64" oninput="recalculate()">
           </div>
           <div class="input-group">
@@ -128,13 +128,18 @@
           </div>
           <div class="input-group">
             <label>Attn Heads<i class="tip"
-                data-tip="Number of query attention heads.&#10;&#10;Derives head_dim = hidden ÷ heads. Each head independently computes attention scores over the full cached sequence.&#10;&#10;Does not affect KV cache size directly — that is driven by KV Heads."></i></label>
+                data-tip="Number of query attention heads.&#10;&#10;Used to derive Head Dim when not set explicitly (head_dim = hidden ÷ heads). Each head independently computes attention scores over the full cached sequence.&#10;&#10;Does not affect KV cache size directly — that is driven by KV Heads × Head Dim."></i></label>
             <input type="number" id="mHeads" placeholder="32" min="1" oninput="recalculate()">
           </div>
           <div class="input-group">
             <label>KV Heads<i class="tip"
                 data-tip="Key/Value head count (Grouped Query Attention).&#10;&#10;Fewer KV heads than query heads reduces KV cache size proportionally. At 1 KV head (MQA), cache shrinks by 64× vs MHA.&#10;&#10;Set equal to Attn Heads for standard multi-head attention (MHA)."></i></label>
             <input type="number" id="mKVHeads" placeholder="32" min="1" oninput="recalculate()">
+          </div>
+          <div class="input-group">
+            <label>Head Dim<i class="tip"
+                data-tip="Dimension of each attention head.&#10;&#10;Usually hidden ÷ attn_heads, but some models (e.g. Qwen3) set this explicitly in their config and it differs from that ratio. When set, this value is used directly in the KV cache formula instead of hidden ÷ heads.&#10;&#10;Auto-filled by Fetch when the model config contains head_dim. Leave blank to derive from Hidden ÷ Attn Heads."></i></label>
+            <input type="number" id="mHeadDim" placeholder="auto" min="1" oninput="recalculate()">
           </div>
           <div class="input-group">
             <label>Context Len<i class="tip"
