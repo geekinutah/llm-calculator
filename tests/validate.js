@@ -2,66 +2,23 @@
 // ═══════════════════════════════════════════════════════════
 //  Calculator Validation Against Public Benchmarks
 //  Run: node tests/validate.js
+//
+//  IMPORTANT: this harness intentionally imports the production math
+//  engine and GPU database. Benchmark validation should exercise the
+//  same code and hardware data that power the web UI.
 // ═══════════════════════════════════════════════════════════
 
 const fixtures = require('./fixtures.json').fixtures;
+const { GPU_DB } = require('../static/gpus.js');
+const { calcThroughput } = require('../static/math.js');
 
-// ── GPU DB (must match app.js) ────────────────────────────
-const GPU_DB = {
-  h100: { name: 'H100 SXM', vram: 80,  bw: 3350, fp16: 989,  fp32: 67,  bf16: 989,  fp8: 1979, int8: 1979, int4: 1979, fp4: null },
-  h200: { name: 'H200 SXM', vram: 141, bw: 4800, fp16: 989,  fp32: 67,  bf16: 989,  fp8: 1979, int8: 1979, int4: 1979, fp4: null },
-  a100: { name: 'A100 SXM', vram: 80,  bw: 2000, fp16: 312,  fp32: 19.5, bf16: 312, fp8: null, int8: 624,  int4: 624,  fp4: null },
-  b200: { name: 'B200 SXM', vram: 192, bw: 8000, fp16: 2250, fp32: 90,  bf16: 2250, fp8: 4500, int8: 4500, int4: 4500, fp4: 9000 },
-};
-
-const PREC_META = {
-  fp32: { bytes: 4  },
-  bf16: { bytes: 2  },
-  fp16: { bytes: 2  },
-  fp8:  { bytes: 1  },
-  int8: { bytes: 1  },
-  int4: { bytes: 0.5 },
-  fp4:  { bytes: 0.5 },
-};
-
-// ── Core calc (must stay in sync with app.js calcThroughput) ──
-function calcThroughput(model, gpu, precision, gpuCount, batch) {
-  const tflopsRaw = getTFLOPS(gpu, precision);
-  if (tflopsRaw === null) return null;
-  const tflops = tflopsRaw * gpuCount;
-  const bwGBs  = gpu.bw * gpuCount;
-
-  const paramsB = model.activeParams ?? model.paramsB;
-  const bytesPerParam = PREC_META[precision].bytes;
-  const modelBytes = paramsB * 1e9 * bytesPerParam;
-
-  const ridgePoint     = (tflops * 1e12) / (bwGBs * 1e9);
-  const arithIntensity = (2 * batch * paramsB * 1e9) / modelBytes;
-  const isComputeBound = arithIntensity >= ridgePoint;
-
-  let rawTPS;
-  if (isComputeBound) {
-    const flopsPerToken  = 2 * paramsB * 1e9;
-    const computeTimeSec = flopsPerToken / (tflops * 1e12 / batch);
-    rawTPS = batch / computeTimeSec;
-  } else {
-    rawTPS = (bwGBs * 1e9) / modelBytes * batch;
-  }
-
-  const mfu = isComputeBound ? 0.45 : 0.40;
+// Fixtures predate the production engine's `params` field name.
+// Normalize only the schema boundary here; do not duplicate calculator math.
+function normalizeModel(model) {
   return {
-    tps: Math.round(rawTPS * mfu),
-    isComputeBound,
-    ridgePoint,
-    arithIntensity,
-    mfu,
+    ...model,
+    params: model.params ?? model.paramsB,
   };
-}
-
-function getTFLOPS(gpu, prec) {
-  const map = { fp32: gpu.fp32, bf16: gpu.bf16, fp16: gpu.fp16,
-                fp8: gpu.fp8, int8: gpu.int8, int4: gpu.int4, fp4: gpu.fp4 };
-  return map[prec] ?? null;
 }
 
 // ── Run validation ────────────────────────────────────────
@@ -87,7 +44,8 @@ for (const f of fixtures) {
   const gpu = GPU_DB[f.gpu];
   if (!gpu) { console.log(`  SKIP ${f.id} — unknown GPU "${f.gpu}"`); continue; }
 
-  const result = calcThroughput(f.model, gpu, f.precision, f.gpuCount, f.batchForCalc);
+  const model = normalizeModel(f.model);
+  const result = calcThroughput(model, gpu, f.precision, f.gpuCount, f.batchForCalc);
   if (!result) { console.log(`  SKIP ${f.id} — precision not supported`); continue; }
 
   const ratio = result.tps / f.benchmarkTPS;
@@ -132,30 +90,28 @@ console.log(`
   These are conservative production baselines (vLLM, LMDeploy, moderate opt).
 
   Specialized engines (TRT-LLM with CUDA graphs, SGLang w/ FlashInfer) achieve
-  0.65–0.80 effective bandwidth utilization at low batch, explaining why the
-  calculator under-predicts latency-optimized single-stream benchmarks.
+  higher effective bandwidth utilization at low batch, explaining why the
+  calculator can under-predict latency-optimized single-stream benchmarks.
 
   At high batch (offline / saturation), batch size dominates the formula and
   MFU is less critical — this is where the calculator is most accurate.
 
   KNOWN SYSTEMATIC BIASES
   ─────────────────────────────────────────────────────────────────────────────
-  1. Low batch (<4), premium engines: calc under-predicts by ~2×
-     → MFU=0.40 is conservative vs TRT-LLM CUDA-graph-optimized kernels
+  1. Low batch (<4), premium engines: calc may under-predict substantially
+     → MFU=0.40 is conservative vs highly optimized kernels
 
-  2. Large models at high batch (70B, batch=64): calc over-predicts by ~2×
-     → KV cache memory traffic not modeled in bandwidth calculation
+  2. Large models at high batch: calc can over-predict
+     → KV cache memory traffic is not modeled in the throughput calculation
      → Scheduling overhead grows with model size
 
-  3. Multi-GPU TP (8× H100): calc over-predicts by ~1.6×
-     → NVLink synchronization overhead not modeled
-     → Real-world TP efficiency ~80-85%, not 100%
+  3. Multi-GPU TP: calc can over-predict
+     → Inter-GPU synchronization overhead is not modeled
+     → Current production math assumes ideal TFLOPS and bandwidth scaling
 
   BOTTOM LINE
   ─────────────────────────────────────────────────────────────────────────────
   The calculator is best used for order-of-magnitude sizing and
-  VRAM feasibility checks. For production capacity planning, apply:
-    · Small model (<13B), optimized engine:  multiply calc TPS by ~2×
-    · Large model (70B+), production batch:  multiply calc TPS by ~0.6×
-    · Multi-GPU TP:                          multiply calc TPS by ~0.8×
+  VRAM feasibility checks. Benchmark fixtures quantify where the simple
+  roofline model diverges from real serving engines.
 `);
